@@ -78,6 +78,8 @@
 
         .score-display { font-size: 3rem; font-weight: 800; color: var(--li-blue); margin: 15px 0; }
         #loading-text { font-size: 0.8rem; color: var(--li-subtext); margin-top: 15px; }
+        
+        .already-played-msg { color: var(--success-green); font-weight: 700; margin-bottom: 10px; display: none;}
     </style>
 </head>
 <body>
@@ -87,6 +89,7 @@
     <div class="subtitle">Daily Logic Challenge</div>
 
     <div id="intro-screen" class="screen active">
+        <div id="status-msg" class="already-played-msg">You've completed today's challenge!</div>
         <div class="how-to-list">
             <div class="how-to-item"><div class="icon">🔍</div><div class="how-to-text"><b>Spot the anomaly</b><span>Find the word that doesn't belong.</span></div></div>
             <div class="how-to-item"><div class="icon">⚡</div><div class="how-to-text"><b>Beat the clock</b><span>Faster answers boost your score.</span></div></div>
@@ -109,6 +112,7 @@
         <div class="score-display" id="final-score">0</div>
         <p style="color: var(--li-subtext); font-size: 0.9rem; margin-bottom: 25px;">You found <span id="correct-count">0</span>/5 Misfits.</p>
         <button class="btn-play" onclick="shareResults()">Share Score 🚀</button>
+        <p style="font-size: 0.75rem; margin-top: 20px; color: var(--li-subtext);">Come back tomorrow for a new puzzle!</p>
     </div>
 </div>
 
@@ -118,12 +122,12 @@
 
     // --- TA CONFIG FIREBASE ICI ---
     const firebaseConfig = {
-        apiKey: "AIzaSyBEG9mOSns3-Gw1vAEnZILaIRKrVnweHdo",
-        authDomain: "misfit-game.firebaseapp.com",
-        projectId: "misfit-game",
-        storageBucket: "misfit-game.firebasestorage.app",
-        messagingSenderId: "394080113498",
-        appId: "1:394080113498:web:18e40d37027d00f67ed963"
+        apiKey: "TON_API_KEY",
+        authDomain: "TON_PROJET.firebaseapp.com",
+        projectId: "TON_PROJET_ID",
+        storageBucket: "TON_PROJET.appspot.com",
+        messagingSenderId: "TON_ID",
+        appId: "TON_APP_ID"
     };
 
     const app = initializeApp(firebaseConfig);
@@ -138,6 +142,14 @@
 
     async function loadFirebaseData() {
         const todayNum = new Date().getDate().toString(); 
+        
+        // VÉRIFICATION : A-t-il déjà joué aujourd'hui ?
+        const lastPlayed = localStorage.getItem('misfit_last_day');
+        if (lastPlayed === todayNum) {
+            showAlreadyPlayed(localStorage.getItem('misfit_last_score'), localStorage.getItem('misfit_last_correct'));
+            return;
+        }
+
         const docRef = doc(db, "daily_puzzles", todayNum);
         try {
             const docSnap = await getDoc(docRef);
@@ -153,6 +165,20 @@
             console.error(e);
             document.getElementById('loading-text').innerText = "Check your connection.";
         }
+    }
+
+    function showAlreadyPlayed(score, correct) {
+        document.getElementById('status-msg').style.display = "block";
+        document.getElementById('start-btn').innerText = "Completed";
+        document.getElementById('start-btn').disabled = true;
+        document.getElementById('loading-text').innerText = "See you tomorrow!";
+        
+        // Optionnel : On peut aussi rediriger vers l'écran de fin direct
+        setTimeout(() => {
+            totalScore = score;
+            correctAnswers = correct;
+            endGame();
+        }, 1500);
     }
 
     window.initGame = function() {
@@ -219,6 +245,12 @@
     }
 
     function endGame() {
+        // SAUVEGARDE LOCALE
+        const todayNum = new Date().getDate().toString();
+        localStorage.setItem('misfit_last_day', todayNum);
+        localStorage.setItem('misfit_last_score', totalScore);
+        localStorage.setItem('misfit_last_correct', correctAnswers);
+
         switchScreen('result-screen');
         document.getElementById('final-score').innerText = totalScore;
         document.getElementById('correct-count').innerText = correctAnswers;
@@ -227,21 +259,26 @@
     window.shareResults = function() {
         const dots = document.querySelectorAll('.dot');
         let emojiGrid = "";
-        dots.forEach(dot => {
-            if (dot.classList.contains('correct')) emojiGrid += "🟩 ";
-            else if (dot.classList.contains('wrong')) emojiGrid += "🟥 ";
-            else emojiGrid += "⬜ "; 
-        });
+        
+        // Si on recharge la page, on n'a plus les classes CSS "correct/wrong" dans le DOM, 
+        // alors on génère une grille simple si les dots sont vides
+        if (dots.length > 0 && dots[0].className === "dot") {
+            emojiGrid = "🎮 Challenge Completed!";
+        } else {
+            dots.forEach(dot => {
+                if (dot.classList.contains('correct')) emojiGrid += "🟩 ";
+                else if (dot.classList.contains('wrong')) emojiGrid += "🟥 ";
+                else emojiGrid += "⬜ "; 
+            });
+        }
 
         const dayNum = new Date().getDate();
-        const shareText = `🔍 MISFIT #${dayNum}\n\n${emojiGrid}\n\n🏆 Score: ${totalScore}\n✅ ${correctAnswers}/5 Spotted\n\nPlay here: ${window.location.href}`;
+        const shareText = `🔍 MISFIT #${dayNum}\n\n${emojiGrid}\n\n🏆 Score: ${totalScore}\n✅ ${correctAnswers}/5 Spotted\n\nPlay here: ${window.location.origin + window.location.pathname}`;
 
         if (navigator.clipboard) {
             navigator.clipboard.writeText(shareText).then(() => {
-                alert("Score copied to clipboard! Paste it on LinkedIn.");
+                alert("Score copied to clipboard!");
             });
-        } else {
-            alert("Your results:\n" + shareText);
         }
     };
 
