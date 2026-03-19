@@ -53,7 +53,9 @@
         .btn-play {
             background: var(--li-blue); color: white; border: none; padding: 14px 40px;
             border-radius: 28px; font-weight: 600; font-size: 1rem; cursor: pointer; width: 80%;
+            transition: 0.2s;
         }
+        .btn-play:disabled { background: #ccc; cursor: not-allowed; }
 
         .progress-bar { display: flex; justify-content: center; gap: 6px; margin-bottom: 25px; }
         .dot { width: 35px; height: 4px; border-radius: 2px; background: var(--li-border); }
@@ -70,13 +72,12 @@
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .option-card {
             border: 2px solid var(--li-border); border-radius: 8px; padding: 24px 10px;
-            font-weight: 600; font-size: 0.95rem; cursor: pointer;
+            font-weight: 600; font-size: 0.95rem; cursor: pointer; transition: 0.15s;
         }
         .option-card:hover { border-color: var(--li-blue); background: var(--li-card-hover); color: var(--li-blue); }
 
         .score-display { font-size: 3rem; font-weight: 800; color: var(--li-blue); margin: 15px 0; }
-        
-        #loading-text { font-size: 0.9rem; color: var(--li-subtext); margin-top: 20px; }
+        #loading-text { font-size: 0.8rem; color: var(--li-subtext); margin-top: 15px; }
     </style>
 </head>
 <body>
@@ -89,10 +90,10 @@
         <div class="how-to-list">
             <div class="how-to-item"><div class="icon">🔍</div><div class="how-to-text"><b>Spot the anomaly</b><span>Find the word that doesn't belong.</span></div></div>
             <div class="how-to-item"><div class="icon">⚡</div><div class="how-to-text"><b>Beat the clock</b><span>Faster answers boost your score.</span></div></div>
-            <div class="how-to-item"><div class="icon">🗓️</div><div class="how-to-text"><b>Daily Ritual</b><span>New challenges every 24h.</span></div></div>
+            <div class="how-to-item"><div class="icon">🗓️</div><div class="how-to-text"><b>Daily Ritual</b><span>5 new challenges every 24h.</span></div></div>
         </div>
         <button id="start-btn" class="btn-play" onclick="initGame()" disabled>Loading Puzzle...</button>
-        <p id="loading-text">Fetching today's challenge...</p>
+        <p id="loading-text">Connecting to server...</p>
     </div>
 
     <div id="game-screen" class="screen">
@@ -107,16 +108,15 @@
         <div style="font-size: 1rem; font-weight: 600;">CHALLENGE COMPLETE</div>
         <div class="score-display" id="final-score">0</div>
         <p style="color: var(--li-subtext); font-size: 0.9rem; margin-bottom: 25px;">You found <span id="correct-count">0</span>/5 Misfits.</p>
-        <button class="btn-play" onclick="shareResults()">Share with Network</button>
+        <button class="btn-play" onclick="shareResults()">Share Score 🚀</button>
     </div>
 </div>
 
 <script type="module">
-    // --- FIREBASE SETUP ---
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
     import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
 
-    // REMPLACE CES LIGNES AVEC TA CONFIG FIREBASE
+    // --- TA CONFIG FIREBASE ICI ---
     const firebaseConfig = {
         apiKey: "AIzaSyBEG9mOSns3-Gw1vAEnZILaIRKrVnweHdo",
         authDomain: "misfit-game.firebaseapp.com",
@@ -129,7 +129,6 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    // --- GAME LOGIC ---
     let puzzles = [];
     let currentIdx = 0;
     let totalScore = 0;
@@ -137,28 +136,25 @@
     let timeLeft = 100;
     let timerId;
 
-    // Charger les données dès l'ouverture
     async function loadFirebaseData() {
         const todayNum = new Date().getDate().toString(); 
         const docRef = doc(db, "daily_puzzles", todayNum);
-        
         try {
             const docSnap = await getDoc(docRef);
             if (docSnap.exists()) {
                 puzzles = docSnap.data().questions;
                 document.getElementById('start-btn').disabled = false;
                 document.getElementById('start-btn').innerText = "Play Now";
-                document.getElementById('loading-text').innerText = "Puzzle #" + todayNum + " is ready.";
+                document.getElementById('loading-text').innerText = "Puzzle #" + todayNum + " is live.";
             } else {
                 document.getElementById('loading-text').innerText = "No puzzle found for today.";
             }
         } catch (e) {
-            console.error("Error loading Firebase:", e);
-            document.getElementById('loading-text').innerText = "Connection error.";
+            console.error(e);
+            document.getElementById('loading-text').innerText = "Check your connection.";
         }
     }
 
-    // Exposer la fonction au bouton HTML
     window.initGame = function() {
         switchScreen('game-screen');
         createDots();
@@ -182,13 +178,10 @@
 
     function loadLevel() {
         if(currentIdx >= puzzles.length) return endGame();
-        
         const p = puzzles[currentIdx];
         document.getElementById('current-hint').innerText = p.topic;
-        
         const dots = document.querySelectorAll('.dot');
         dots[currentIdx].classList.add('active');
-
         const grid = document.getElementById('options-grid');
         grid.innerHTML = '';
         [...p.options].sort(() => Math.random() - 0.5).forEach(opt => {
@@ -198,7 +191,6 @@
             card.onclick = () => handleChoice(opt);
             grid.appendChild(card);
         });
-
         startTimer();
     }
 
@@ -233,9 +225,24 @@
     }
 
     window.shareResults = function() {
-        const text = `🔍 MISFIT #${new Date().getDate()}\n🏆 Score: ${totalScore}\n✅ ${correctAnswers}/5 Misfits spotted\n\nPlay here: [TON_LIEN_GITHUB_PAGES]`;
-        navigator.clipboard.writeText(text);
-        alert("Results copied to clipboard!");
+        const dots = document.querySelectorAll('.dot');
+        let emojiGrid = "";
+        dots.forEach(dot => {
+            if (dot.classList.contains('correct')) emojiGrid += "🟩 ";
+            else if (dot.classList.contains('wrong')) emojiGrid += "🟥 ";
+            else emojiGrid += "⬜ "; 
+        });
+
+        const dayNum = new Date().getDate();
+        const shareText = `🔍 MISFIT #${dayNum}\n\n${emojiGrid}\n\n🏆 Score: ${totalScore}\n✅ ${correctAnswers}/5 Spotted\n\nPlay here: ${window.location.href}`;
+
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(shareText).then(() => {
+                alert("Score copied to clipboard! Paste it on LinkedIn.");
+            });
+        } else {
+            alert("Your results:\n" + shareText);
+        }
     };
 
     loadFirebaseData();
