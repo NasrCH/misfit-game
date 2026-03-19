@@ -2,7 +2,7 @@
 
 **MISFIT** is a minimalist web-based puzzle game designed for professionals. Every day, users are challenged to identify the "intruder" in 5 different corporate-themed sets.
 
-[▶️ Play MISFIT now](https://ton-pseudo.github.io/misfit-game)
+[▶️ Play MISFIT now](https://NasrCH.github.io/misfit-game)
 
 ---
 
@@ -23,4 +23,4 @@
 3. Tap it before the timer runs out!
 
 ---
-*Created with ☕ and logic by [Ton Nom/Pseudo]*
+*Created with ☕ and logic by [TUNACH87]*
