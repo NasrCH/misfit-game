@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MISFIT | Daily Logic Challenge</title>
+    <style>
+        :root {
+            --li-blue: #0a66c2;
+            --li-bg: #f4f2ee;
+            --li-text: #000000e6;
+            --li-subtext: rgba(0,0,0,0.6);
+            --li-border: #e0e0e0;
+            --li-card-hover: #f0f7ff;
+            --success-green: #057647;
+            --error-red: #cc1016;
+        }
+
+        body {
+            font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--li-bg);
+            color: var(--li-text);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .game-card {
+            background: white;
+            width: 92%;
+            max-width: 420px;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+            padding: 32px 24px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* TYPOGRAPHY */
+        .title-logo {
+            font-size: 2.2rem;
+            font-weight: 800;
+            letter-spacing: -1.5px;
+            color: var(--li-blue);
+            margin: 0;
+        }
+
+        .subtitle {
+            text-transform: uppercase;
+            font-size: 0.7rem;
+            letter-spacing: 2px;
+            color: var(--li-subtext);
+            font-weight: 700;
+            margin-bottom: 30px;
+        }
+
+        /* SCREENS */
+        .screen { display: none; transition: all 0.3s ease; }
+        .active { display: block; }
+
+        /* INTRO LIST */
+        .how-to-list {
+            text-align: left;
+            margin: 0 auto 30px auto;
+            max-width: 300px;
+        }
+
+        .how-to-item {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 18px;
+        }
+
+        .icon { font-size: 1.3rem; margin-right: 15px; width: 25px; text-align: center; }
+        .how-to-text b { display: block; font-size: 0.95rem; }
+        .how-to-text span { font-size: 0.85rem; color: var(--li-subtext); }
+
+        /* BUTTONS */
+        .btn-play {
+            background: var(--li-blue);
+            color: white;
+            border: none;
+            padding: 14px 40px;
+            border-radius: 28px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            width: 80%;
+            transition: background 0.2s;
+        }
+
+        .btn-play:hover { background: #004182; }
+
+        /* GAMEPLAY ELEMENTS */
+        .progress-bar { display: flex; justify-content: center; gap: 6px; margin-bottom: 25px; }
+        .dot { width: 35px; height: 4px; border-radius: 2px; background: var(--li-border); transition: 0.3s; }
+        .dot.active { background: #999; }
+        .dot.correct { background: var(--success-green); }
+        .dot.wrong { background: var(--error-red); }
+
+        .timer-container { height: 4px; width: 100%; background: #eee; border-radius: 2px; margin-bottom: 25px; overflow: hidden; }
+        .timer-fill { height: 100%; width: 100%; background: var(--li-blue); transition: width 0.1s linear; }
+
+        .hint-label { color: var(--li-subtext); font-size: 0.8rem; text-transform: uppercase; margin-bottom: 5px; }
+        .hint-value { font-size: 1.1rem; font-weight: 700; margin-bottom: 25px; }
+
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .option-card {
+            border: 2px solid var(--li-border);
+            border-radius: 8px;
+            padding: 24px 10px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .option-card:hover { border-color: var(--li-blue); background: var(--li-card-hover); color: var(--li-blue); }
+
+        /* RESULTS */
+        .score-display { font-size: 3rem; font-weight: 800; color: var(--li-blue); margin: 15px 0; }
+    </style>
+</head>
+<body>
+
+<div class="game-card">
+    
+    <div class="title-logo">MISFIT</div>
+    <div class="subtitle">Daily Logic Challenge</div>
+
+    <div id="intro-screen" class="screen active">
+        <div class="how-to-list">
+            <div class="how-to-item">
+                <div class="icon">🔍</div>
+                <div class="how-to-text"><b>Spot the anomaly</b><span>Find the word that doesn't belong.</span></div>
+            </div>
+            <div class="how-to-item">
+                <div class="icon">⚡</div>
+                <div class="how-to-text"><b>Beat the clock</b><span>Faster answers boost your score.</span></div>
+            </div>
+            <div class="how-to-item">
+                <div class="icon">🗓️</div>
+                <div class="how-to-text"><b>Daily Ritual</b><span>5 new challenges every day.</span></div>
+            </div>
+        </div>
+        <button class="btn-play" onclick="startGame()">Start Game</button>
+        <p style="font-size: 0.7rem; color: #999; margin-top: 20px;">PUZZLE #01 • MARCH 19, 2026</p>
+    </div>
+
+    <div id="game-screen" class="screen">
+        <div class="progress-bar" id="dots-container"></div>
+        <div class="timer-container"><div id="timer-fill" class="timer-fill"></div></div>
+        
+        <div class="hint-label">Topic</div>
+        <div class="hint-value" id="current-hint">Loading...</div>
+
+        <div class="grid" id="options-grid"></div>
+    </div>
+
+    <div id="result-screen" class="screen">
+        <div style="font-size: 1rem; font-weight: 600;">CHALLENGE COMPLETE</div>
+        <div class="score-display" id="final-score">0</div>
+        <p style="color: var(--li-subtext); font-size: 0.9rem; margin-bottom: 25px;">You found <span id="correct-count">0</span>/5 Misfits.</p>
+        <button class="btn-play" onclick="shareResults()">Share with Network</button>
+    </div>
+
+</div>
+
+<script>
+    // 5 Professional English Challenges
+    const puzzles = [
+        { topic: "Cloud Models", options: ["SaaS", "IaaS", "PaaS", "PDF"], answer: "PDF" },
+        { topic: "Management Methods", options: ["Agile", "Scrum", "Kanban", "Office"], answer: "Office" },
+        { topic: "Digital Marketing", options: ["CTR", "SEO", "PPC", "NDA"], answer: "NDA" },
+        { topic: "Funding Stages", options: ["Seed", "Series A", "Series B", "Pre-sell"], answer: "Pre-sell" },
+        { topic: "Team Roles", options: ["Dev", "PO", "Designer", "User"], answer: "User" }
+    ];
+
+    let currentIdx = 0;
+    let totalScore = 0;
+    let correctAnswers = 0;
+    let timeLeft = 100;
+    let timerId;
+
+    function startGame() {
+        switchScreen('game-screen');
+        createDots();
+        loadLevel();
+    }
+
+    function switchScreen(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+    }
+
+    function createDots() {
+        const container = document.getElementById('dots-container');
+        container.innerHTML = '';
+        puzzles.forEach(() => {
+            const d = document.createElement('div');
+            d.className = 'dot';
+            container.appendChild(d);
+        });
+    }
+
+    function loadLevel() {
+        if(currentIdx >= puzzles.length) return endGame();
+        
+        const p = puzzles[currentIdx];
+        document.getElementById('current-hint').innerText = p.topic;
+        
+        // Update Dots
+        const dots = document.querySelectorAll('.dot');
+        dots[currentIdx].classList.add('active');
+
+        // Render Options
+        const grid = document.getElementById('options-grid');
+        grid.innerHTML = '';
+        [...p.options].sort(() => Math.random() - 0.5).forEach(opt => {
+            const card = document.createElement('div');
+            card.className = 'option-card';
+            card.innerText = opt;
+            card.onclick = () => handleChoice(opt);
+            grid.appendChild(card);
+        });
+
+        startTimer();
+    }
+
+    function startTimer() {
+        timeLeft = 100;
+        clearInterval(timerId);
+        timerId = setInterval(() => {
+            timeLeft -= 1.5;
+            document.getElementById('timer-fill').style.width = timeLeft + "%";
+            if(timeLeft <= 0) handleChoice(null);
+        }, 100);
+    }
+
+    function handleChoice(choice) {
+        clearInterval(timerId);
+        const dots = document.querySelectorAll('.dot');
+        const correct = puzzles[currentIdx].answer;
+
+        if(choice === correct) {
+            totalScore += Math.round(timeLeft * 10);
+            correctAnswers++;
+            dots[currentIdx].classList.replace('active', 'correct');
+        } else {
+            dots[currentIdx].classList.replace('active', 'wrong');
+        }
+
+        currentIdx++;
+        setTimeout(loadLevel, 600);
+    }
+
+    function endGame() {
+        switchScreen('result-screen');
+        document.getElementById('final-score').innerText = totalScore;
+        document.getElementById('correct-count').innerText = correctAnswers;
+    }
+
+    function shareResults() {
+        const text = `🔍 MISFIT #01\n🏆 Score: ${totalScore}\n✅ ${correctAnswers}/5 Misfits spotted\n\nCan you find them faster? #MisfitGame #LinkedInDaily`;
+        navigator.clipboard.writeText(text);
+        alert("Results copied to clipboard! You can now paste them on LinkedIn.");
+    }
+</script>
+
+</body>
+</html>
