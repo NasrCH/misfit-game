@@ -240,6 +240,39 @@
             pointer-events: none; z-index: 999; white-space: nowrap;
         }
         .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        /* --- PSEUDO SCREEN --- */
+        .pseudo-icon  { font-size: 2.8rem; margin-bottom: 12px; }
+        .pseudo-title { font-size: 1.15rem; font-weight: 800; margin: 0 0 6px 0; }
+        .pseudo-sub   { font-size: 0.78rem; color: var(--li-subtext); margin: 0 0 22px 0; line-height: 1.4; }
+        .pseudo-input {
+            width: 100%; padding: 12px 16px; border: 2px solid var(--li-border);
+            border-radius: 10px; font-size: 1rem; font-weight: 600; text-align: center;
+            outline: none; transition: border-color 0.2s, box-shadow 0.2s;
+            margin-bottom: 8px; font-family: inherit;
+        }
+        .pseudo-input:focus { border-color: var(--li-blue); box-shadow: 0 0 0 3px rgba(10,102,194,0.1); }
+        .pseudo-error { font-size: 0.74rem; color: var(--error-red); min-height: 20px; margin-bottom: 10px; }
+
+        /* --- LEADERBOARD --- */
+        .leaderboard  { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--li-border); text-align: left; }
+        .lb-title     { font-size: 0.68rem; font-weight: 700; letter-spacing: 1.8px; text-transform: uppercase; color: var(--li-subtext); margin: 0 0 10px 0; }
+        .lb-row       { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; font-size: 0.83rem; }
+        .lb-row.is-me { background: #eef4fb; }
+        .lb-rank      { width: 26px; text-align: center; font-weight: 800; font-size: 0.8rem; color: var(--li-subtext); flex-shrink: 0; }
+        .lb-name      { flex: 1; font-weight: 700; color: var(--li-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lb-name.is-me{ color: var(--li-blue); }
+        .lb-correct   { font-size: 0.7rem; color: var(--li-subtext); white-space: nowrap; }
+        .lb-score     { font-weight: 800; color: var(--li-blue); white-space: nowrap; min-width: 54px; text-align: right; }
+        .lb-empty     { text-align: center; color: var(--li-subtext); font-size: 0.8rem; padding: 14px 0; }
+        .lb-encourage {
+            text-align: center; font-size: 0.77rem; line-height: 1.5;
+            color: var(--li-subtext);
+            background: linear-gradient(135deg, #f8f9ff, #f0f7ff);
+            border: 1px solid #ddeeff; border-radius: 10px;
+            padding: 12px 14px; margin-top: 10px;
+        }
+        .lb-encourage strong { color: var(--li-blue); }
     </style>
 </head>
 <body>
@@ -296,9 +329,19 @@
         </div>
     </div>
 
+    <!-- PSEUDO -->
+    <div id="pseudo-screen" class="screen">
+        <div class="pseudo-icon">👤</div>
+        <h3 class="pseudo-title">What's your name?</h3>
+        <p class="pseudo-sub">Your score will appear on the daily leaderboard 🏆</p>
+        <input  id="pseudo-input" class="pseudo-input" type="text" aria-label="Your nickname"
+                placeholder="Enter your nickname…" maxlength="20" autocomplete="off" spellcheck="false">
+        <div id="pseudo-error" class="pseudo-error"></div>
+        <button id="pseudo-btn" class="btn-play" disabled>Start Game ▶</button>
+    </div>
+
     <!-- GAME -->
-    <div id="game-screen" class="screen">
-        <div class="game-header">
+    <div id="game-screen" class="screen">        <div class="game-header">
             <div class="question-counter" id="question-counter">Question 1 / 5</div>
             <div class="score-live" id="score-live">0 pts</div>
         </div>
@@ -323,6 +366,12 @@
         <div class="score-label">Correct: <strong><span id="correct-count">0</span>/<span id="total-count">5</span></strong></div>
         <div class="best-score-note" id="best-score-note"></div>
         <button class="btn-play" id="share-btn">Share Score 🚀</button>
+
+        <!-- Leaderboard quotidien -->
+        <div class="leaderboard">
+            <p class="lb-title">🏆 Today's Top 10</p>
+            <div id="lb-list"><div class="lb-empty">Loading…</div></div>
+        </div>
     </div>
 </div>
 
@@ -330,7 +379,7 @@
 
 <script type="module">
     import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
-    import { initializeFirestore, persistentLocalCache, doc, getDoc, getDocFromCache, setDoc } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
+    import { initializeFirestore, persistentLocalCache, doc, getDoc, getDocFromCache, setDoc, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
 
     const firebaseConfig = {
         apiKey: "AIzaSyBEG9mOSns3-Gw1vAEnZILaIRKrVnweHdo",
@@ -355,8 +404,9 @@
     let isTransitioning = false;
     let questionResults = [];   // '✅' ou '❌' par question
     let timerStart      = 0;
-    let currentStreak   = 0;   // ✅ NEW: streak consécutif
-    let cachedIp        = '';  // IP publique mise en cache au premier appel
+    let currentStreak   = 0;
+    let cachedIp        = '';
+    let playerPseudo    = localStorage.getItem('misfit_pseudo') || '';
 
     const TIMER_DURATION_MS = 15000;  // ⬆️ 15 s par question (était 10 s)
     const MAX_SCORE_PER_Q   = 500;
@@ -388,7 +438,7 @@
     }
 
     function showScreen(id) {
-        ['intro-screen','game-screen','result-screen'].forEach(s => {
+        ['intro-screen','pseudo-screen','game-screen','result-screen'].forEach(s => {
             document.getElementById(s).classList.toggle('active', s === id);
         });
     }
@@ -469,8 +519,10 @@
             return sid;
         }
 
-        // Hash SHA-256 de l'IP → 24 chars hex
-        const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip));
+        // Hash SHA-256(IP + pseudo) → identifiant unique par personne
+        // Même réseau WiFi : pseudo différent = hash différent = peut jouer ✅
+        const raw = ip + '###' + playerPseudo.toLowerCase().trim();
+        const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
         return Array.from(new Uint8Array(buf))
             .map(b => b.toString(16).padStart(2, '0'))
             .join('')
@@ -488,10 +540,13 @@
         }
     }
 
-    /** Sauvegarde la partie dans Firestore (cross-session, anti-navigation privée). */
+    /** Sauvegarde la partie dans Firestore (anti-replay + leaderboard). */
     async function savePlayRecord(deviceId, todayKey) {
+        const pseudoSlug = playerPseudo.toLowerCase().trim().replaceAll(/[^a-z0-9]/g, '_');
         try {
+            // 1) Enregistrement anti-replay (clé = hash(IP+pseudo) + date)
             await setDoc(doc(db, "play_records", `${deviceId}_${todayKey}`), {
+                pseudo:  playerPseudo,
                 score:   totalScore,
                 correct: correctAnswers,
                 results: questionResults,
@@ -499,9 +554,94 @@
                 ip:      cachedIp,
                 ts:      new Date().toISOString(),
             });
+            // 2) Score pour le leaderboard (1 entrée par pseudo par jour)
+            await setDoc(doc(db, "scores", `${todayKey}_${pseudoSlug}`), {
+                pseudo:  playerPseudo,
+                score:   totalScore,
+                correct: correctAnswers,
+                total:   puzzles.length,
+                date:    todayKey,
+                ts:      new Date().toISOString(),
+            });
         } catch (e) {
             console.warn("Could not save play record to Firestore:", e);
         }
+    }
+
+    /** Charge et affiche le Top 10 du jour. */
+    async function loadLeaderboard() {
+        const lbEl     = document.getElementById('lb-list');
+        const todayKey = getTodayKey();
+        lbEl.innerHTML = '<div class="lb-empty">Loading…</div>';
+
+        try {
+            const snaps    = await getDocs(query(collection(db, 'scores'), where('date', '==', todayKey)));
+            let allEntries = snaps.docs.map(d => d.data());
+            const myKey    = playerPseudo.trim().toLowerCase();
+
+            // ── Injection optimiste ───────────────────────────────────────────
+            // savePlayRecord() tourne en arrière-plan : si le score n'est pas
+            // encore dans Firestore, on l'injecte localement pour l'affichage
+            // immédiat sans attendre la confirmation réseau.
+            const alreadySaved = allEntries.some(e => e.pseudo.trim().toLowerCase() === myKey);
+            const myTotal      = puzzles.length || Number(localStorage.getItem('misfit_total')) || 5;
+            if (!alreadySaved && playerPseudo && totalScore > 0) {
+                allEntries.push({
+                    pseudo:  playerPseudo,
+                    score:   totalScore,
+                    correct: correctAnswers,
+                    total:   myTotal,
+                    date:    todayKey,
+                });
+            }
+
+            // Trier pour calculer le rang global du joueur
+            allEntries.sort((a, b) => b.score - a.score);
+            const myRankIdx = allEntries.findIndex(e => e.pseudo.trim().toLowerCase() === myKey);
+            const myRank    = myRankIdx >= 0 ? myRankIdx + 1 : null;
+            const inTop10   = myRankIdx >= 0 && myRankIdx < 10;
+            const top10     = allEntries.slice(0, 10);
+
+            if (top10.length === 0) {
+                lbEl.innerHTML = '<div class="lb-empty">No scores yet today. Be the first! 🚀</div>';
+                return;
+            }
+
+            const medals = ['🥇', '🥈', '🥉'];
+
+            // ── Message d'encouragement AVANT le top 10 ──────────────────────
+            let html = '';
+            if (!inTop10 && playerPseudo) {
+                const rankTxt = myRank ? `You're <strong>#${myRank}</strong> today with <strong>${totalScore} pts</strong>.<br>` : '';
+                html += `
+                <div class="lb-encourage">
+                    ${rankTxt}
+                    Not in the top 10 yet — come back tomorrow and climb the board! 🚀
+                </div>`;
+            }
+
+            html += top10.map((e, i) => {
+                const isMe = e.pseudo.trim().toLowerCase() === myKey;
+                const rank = i < 3 ? medals[i] : `${i + 1}`;
+                return `
+                <div class="lb-row ${isMe ? 'is-me' : ''}">
+                    <span class="lb-rank">${rank}</span>
+                    <span class="lb-name ${isMe ? 'is-me' : ''}">${escapeHtml(e.pseudo)}${isMe ? ' 👈' : ''}</span>
+                    <span class="lb-correct">${e.correct}/${e.total}</span>
+                    <span class="lb-score">${e.score} pts</span>
+                </div>`;
+            }).join('');
+
+
+            lbEl.innerHTML = html;
+        } catch (e) {
+            console.warn('Leaderboard load failed:', e);
+            lbEl.innerHTML = '<div class="lb-empty">Could not load leaderboard.</div>';
+        }
+    }
+
+    function escapeHtml(str) {
+        return str.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     }
 
     // ─── Load ─────────────────────────────────────────────────────────────────
@@ -522,6 +662,7 @@
         if (lastPlayed === todayKey) {
             clearInterval(dotTimer);
             btn.classList.remove('is-loading');
+            playerPseudo    = localStorage.getItem('misfit_pseudo') || '';
             totalScore      = Number(localStorage.getItem('misfit_score'))   || 0;
             correctAnswers  = Number(localStorage.getItem('misfit_correct')) || 0;
             questionResults = JSON.parse(localStorage.getItem('misfit_results') || '[]');
@@ -530,18 +671,10 @@
         }
 
         try {
-            // ── deviceId lancé immédiatement (appelle getPublicIp en interne) ──
-            const deviceIdPromise = getDeviceId();
-
-            // ── checkAlreadyPlayed démarre dès que l'ID est prêt,
-            //    EN PARALLÈLE avec le chargement du puzzle ─────────────────────
-            const recordPromise = deviceIdPromise.then(did => checkAlreadyPlayed(did, todayKey));
-
-            // ── Un seul await pour puzzle + deviceId + play record ────────────
-            const [snap, , record] = await Promise.all([
+            // Charger le puzzle + pré-chauffer l'IP en parallèle
+            const [snap] = await Promise.all([
                 getDocFast(doc(db, "daily_puzzles", getTodayPuzzleId())),
-                deviceIdPromise,
-                recordPromise,
+                getPublicIp(),
             ]);
 
             if (!snap.exists()) {
@@ -550,20 +683,6 @@
             puzzles = snap.data().questions;
             if (!Array.isArray(puzzles) || puzzles.length === 0) {
                 throw Object.assign(new Error("NO_QUESTIONS"), { code: 'malformed' });
-            }
-
-            // ── Déjà joué (navigation privée détectée via Firestore) ──────────
-            if (record) {
-                totalScore      = record.score   || 0;
-                correctAnswers  = record.correct || 0;
-                questionResults = record.results || [];
-                localStorage.setItem('misfit_day',     todayKey);
-                localStorage.setItem('misfit_score',   String(totalScore));
-                localStorage.setItem('misfit_correct', String(correctAnswers));
-                localStorage.setItem('misfit_results', JSON.stringify(questionResults));
-                localStorage.setItem('misfit_total',   String(puzzles.length));
-                showResults();
-                return;
             }
 
             btn.textContent = "Play Now ▶";
@@ -583,7 +702,6 @@
             }
             banner.classList.add('visible');
         } finally {
-            // Toujours nettoyer l'état de chargement, quelle que soit l'issue
             clearInterval(dotTimer);
             btn.classList.remove('is-loading');
         }
@@ -591,14 +709,77 @@
 
     // ─── Game init ────────────────────────────────────────────────────────────
 
+    // "Play Now" → écran pseudo (pré-remplit avec le pseudo enregistré)
+    document.getElementById('start-btn').addEventListener('click', () => {
+        const saved = localStorage.getItem('misfit_pseudo') || '';
+        const input = document.getElementById('pseudo-input');
+        input.value = saved;
+        document.getElementById('pseudo-btn').disabled  = saved.trim().length < 2;
+        document.getElementById('pseudo-error').textContent = '';
+        showScreen('pseudo-screen');
+        if (!saved) input.focus();
+    });
+
+    document.getElementById('share-btn').addEventListener('click', shareResults);
+
+    // ── Pseudo screen : validation + vérification Firestore ───────────────
+    const pseudoInput = document.getElementById('pseudo-input');
+    const pseudoBtn   = document.getElementById('pseudo-btn');
+
+    pseudoInput.addEventListener('input', () => {
+        pseudoBtn.disabled = pseudoInput.value.trim().length < 2;
+        document.getElementById('pseudo-error').textContent = '';
+    });
+    pseudoInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !pseudoBtn.disabled) submitPseudo();
+    });
+    pseudoBtn.addEventListener('click', submitPseudo);
+
+    async function submitPseudo() {
+        const raw   = pseudoInput.value.trim();
+        const errEl = document.getElementById('pseudo-error');
+
+        if (raw.length < 2)  { errEl.textContent = 'Name must be at least 2 characters.'; return; }
+        if (raw.length > 20) { errEl.textContent = 'Name must be 20 characters or less.';  return; }
+        if (!/^[A-Za-z0-9 \-_]+$/.test(raw)) {
+            errEl.textContent = 'Letters, numbers, spaces, - and _ only.'; return;
+        }
+
+        playerPseudo = raw;
+        localStorage.setItem('misfit_pseudo', raw);
+
+        pseudoBtn.textContent = 'Checking…';
+        pseudoBtn.disabled    = true;
+
+        // Vérifier si ce pseudo a déjà joué aujourd'hui (anti-replay + navigation privée)
+        const todayKey = getTodayKey();
+        const deviceId = await getDeviceId();
+        const record   = await checkAlreadyPlayed(deviceId, todayKey);
+
+        if (record) {
+            totalScore      = record.score   || 0;
+            correctAnswers  = record.correct || 0;
+            questionResults = record.results || [];
+            localStorage.setItem('misfit_day',     todayKey);
+            localStorage.setItem('misfit_score',   String(totalScore));
+            localStorage.setItem('misfit_correct', String(correctAnswers));
+            localStorage.setItem('misfit_results', JSON.stringify(questionResults));
+            localStorage.setItem('misfit_total',   String(puzzles.length));
+            showResults();
+            return;
+        }
+
+        pseudoBtn.textContent = 'Start Game ▶';
+        pseudoBtn.disabled    = false;
+        initGame();
+    }
+
     function initGame() {
         showScreen('game-screen');
         createDots();
         loadLevel();
     }
 
-    document.getElementById('start-btn').addEventListener('click', initGame);
-    document.getElementById('share-btn').addEventListener('click', shareResults);
 
     function createDots() {
         const container = document.getElementById('dots-container');
@@ -793,6 +974,7 @@
 
         showScreen('result-screen');
         animateScore(totalScore);
+        loadLeaderboard();
     }
 
     function animateScore(target) {
@@ -836,7 +1018,7 @@
 
     // DEV HELPER : ouvrir index.html?reset vide tout le cache MISFIT
     if (new URLSearchParams(location.search).has('reset')) {
-        const keys = ['misfit_did','misfit_ip','misfit_device_id', // device ID (toutes versions)
+        const keys = ['misfit_pseudo','misfit_did','misfit_ip','misfit_device_id',
                       'misfit_day','misfit_score','misfit_correct',
                       'misfit_results','misfit_total','misfit_best_score'];
         keys.forEach(k => { localStorage.removeItem(k); sessionStorage.removeItem(k); });
