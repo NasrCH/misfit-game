@@ -14,72 +14,221 @@
             --li-card-hover: #f0f7ff;
             --success-green: #057647;
             --error-red: #cc1016;
+            --warning-orange: #e07000;
+            --gold: #f5a623;
         }
+
+        * { box-sizing: border-box; }
 
         body {
             font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: var(--li-bg);
+            background: linear-gradient(135deg, #e8f0fe 0%, #f4f2ee 55%, #e6f4ec 100%);
             color: var(--li-text);
             margin: 0;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
+            padding: 16px;
         }
 
         .game-card {
             background: white;
-            width: 92%;
+            width: 100%;
             max-width: 420px;
-            border-radius: 12px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.06);
-            padding: 32px 24px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(10,102,194,0.13), 0 2px 8px rgba(0,0,0,0.06);
+            padding: 28px 24px;
             text-align: center;
-            position: relative;
         }
 
-        .title-logo { font-size: 2.2rem; font-weight: 800; letter-spacing: -1.5px; color: var(--li-blue); margin: 0; }
-        .subtitle { text-transform: uppercase; font-size: 0.7rem; letter-spacing: 2px; color: var(--li-subtext); font-weight: 700; margin-bottom: 30px; }
+        .title-logo {
+            font-size: 2rem; font-weight: 900; margin: 0;
+            background: linear-gradient(135deg, #0a66c2, #1a8cff);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text; letter-spacing: -1px;
+        }
+        .subtitle { text-transform: uppercase; font-size: 0.65rem; letter-spacing: 2px; color: var(--li-subtext); margin-bottom: 24px; }
 
+        /* --- SCREENS --- */
         .screen { display: none; }
-        .active { display: block; }
+        .screen.active { display: block; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-        .how-to-list { text-align: left; margin: 0 auto 30px auto; max-width: 300px; }
-        .how-to-item { display: flex; align-items: flex-start; margin-bottom: 18px; }
-        .icon { font-size: 1.3rem; margin-right: 15px; width: 25px; text-align: center; }
-        .how-to-text b { display: block; font-size: 0.95rem; }
-        .how-to-text span { font-size: 0.85rem; color: var(--li-subtext); }
+        /* --- HOW TO PLAY --- */
+        .how-to-footer {
+            margin-top: 28px; padding-top: 20px;
+            border-top: 1px solid var(--li-border); text-align: left;
+        }
+        .how-to-title {
+            font-size: 0.68rem; font-weight: 700; letter-spacing: 1.8px;
+            text-transform: uppercase; color: var(--li-subtext); margin: 0 0 16px 0;
+        }
+        .steps-list { display: flex; flex-direction: column; gap: 12px; }
+        .step {
+            display: flex; align-items: flex-start; gap: 12px;
+            font-size: 0.82rem; color: var(--li-text); line-height: 1.4;
+        }
+        .step-icon {
+            width: 34px; height: 34px; min-width: 34px; border-radius: 50%;
+            background: linear-gradient(135deg, #eef4fb, #ddeeff);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.05rem; box-shadow: 0 1px 4px rgba(10,102,194,0.1);
+        }
+        .step-text strong {
+            display: block; font-size: 0.82rem; font-weight: 700;
+            color: var(--li-text); margin-bottom: 2px;
+        }
+        .step-text span { font-size: 0.74rem; color: var(--li-subtext); line-height: 1.4; }
 
+        /* --- BUTTONS --- */
         .btn-play {
-            background: var(--li-blue); color: white; border: none; padding: 14px 40px;
-            border-radius: 28px; font-weight: 600; font-size: 1rem; cursor: pointer; width: 80%;
-            transition: 0.2s;
+            background: linear-gradient(135deg, #0a66c2, #0856a0);
+            color: white; border: none; padding: 13px 30px;
+            border-radius: 26px; font-weight: 700; cursor: pointer; width: 100%; font-size: 1rem;
+            transition: all 0.2s; box-shadow: 0 4px 16px rgba(10,102,194,0.32); letter-spacing: 0.3px;
         }
-        .btn-play:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-play:hover:not(:disabled) {
+            background: linear-gradient(135deg, #0856a0, #064080);
+            box-shadow: 0 6px 22px rgba(10,102,194,0.42); transform: translateY(-1px);
+        }
+        .btn-play:active:not(:disabled) { transform: scale(0.97); }
+        .btn-play:disabled { background: #ccc; cursor: not-allowed; box-shadow: none; }
 
-        .progress-bar { display: flex; justify-content: center; gap: 6px; margin-bottom: 25px; }
-        .dot { width: 35px; height: 4px; border-radius: 2px; background: var(--li-border); }
-        .dot.active { background: #999; }
-        .dot.correct { background: var(--success-green); }
-        .dot.wrong { background: var(--error-red); }
+        /* --- GAME HEADER (counter + live score) --- */
+        .game-header {
+            display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;
+        }
+        .question-counter {
+            font-size: 0.74rem; font-weight: 700; color: var(--li-subtext);
+            text-transform: uppercase; letter-spacing: 1px;
+        }
+        .score-live {
+            font-size: 0.78rem; font-weight: 800; color: var(--li-blue);
+            background: #eef4fb; border-radius: 20px; padding: 3px 10px;
+        }
 
-        .timer-container { height: 4px; width: 100%; background: #eee; border-radius: 2px; margin-bottom: 25px; overflow: hidden; }
-        .timer-fill { height: 100%; width: 100%; background: var(--li-blue); transition: width 0.1s linear; }
+        /* --- PROGRESS DOTS --- */
+        .progress-bar { display: flex; justify-content: center; gap: 8px; margin-bottom: 12px; }
+        .dot {
+            width: 32px; height: 6px; border-radius: 3px; background: var(--li-border);
+            transition: background 0.35s, transform 0.2s;
+        }
+        .dot.active  { background: #bad3f0; transform: scaleY(1.4); }
+        .dot.correct { background: var(--success-green); transform: scaleY(1); }
+        .dot.wrong   { background: var(--error-red); transform: scaleY(1); }
 
-        .hint-label { color: var(--li-subtext); font-size: 0.8rem; text-transform: uppercase; margin-bottom: 5px; }
-        .hint-value { font-size: 1.1rem; font-weight: 700; margin-bottom: 25px; }
+        /* --- TIMER --- */
+        .timer-container { height: 5px; width: 100%; background: #eee; border-radius: 3px; margin-bottom: 20px; overflow: hidden; }
+        .timer-fill {
+            height: 100%; width: 100%;
+            background: linear-gradient(90deg, #0a66c2, #4d9de0);
+            transition: width 0.08s linear, background 0.4s;
+            border-radius: 3px;
+        }
+        .timer-fill.warning { background: linear-gradient(90deg, var(--warning-orange), #f5c542); }
+        .timer-fill.danger  { background: linear-gradient(90deg, var(--error-red), #ff6b6b); }
 
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        /* --- TOPIC AREA --- */
+        .topic-area {
+            background: linear-gradient(135deg, #f0f7ff, #e8f0fe);
+            border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+            border: 1px solid #ddeeff;
+        }
+        .hint-label {
+            color: var(--li-subtext); font-size: 0.68rem;
+            text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; margin-bottom: 4px;
+        }
+        .hint-value { font-size: 1.3rem; font-weight: 800; color: var(--li-text); margin: 0; }
+
+        /* --- STREAK BADGE --- */
+        .streak-badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            background: linear-gradient(135deg, #fff3e0, #ffe0b2);
+            border: 1px solid #ffb74d; border-radius: 20px;
+            padding: 3px 12px; font-size: 0.72rem; font-weight: 700; color: #bf360c;
+            margin-bottom: 12px; opacity: 0; transition: opacity 0.3s, transform 0.3s;
+            transform: scale(0.9);
+        }
+        .streak-badge.visible { opacity: 1; transform: scale(1); }
+
+        /* --- OPTION CARDS --- */
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .option-card {
-            border: 2px solid var(--li-border); border-radius: 8px; padding: 24px 10px;
-            font-weight: 600; font-size: 0.95rem; cursor: pointer; transition: 0.15s;
+            border: 2px solid var(--li-border); border-radius: 10px; padding: 20px 10px;
+            font-weight: 700; font-size: 0.9rem; cursor: pointer;
+            background: white; width: 100%;
+            transition: border-color 0.15s, background 0.15s, transform 0.15s, box-shadow 0.15s;
+            user-select: none;
         }
-        .option-card:hover { border-color: var(--li-blue); background: var(--li-card-hover); color: var(--li-blue); }
+        .option-card:hover:not(:disabled) {
+            border-color: var(--li-blue); background: var(--li-card-hover);
+            transform: translateY(-2px); box-shadow: 0 4px 12px rgba(10,102,194,0.14);
+        }
+        .option-card:focus-visible { outline: 3px solid var(--li-blue); outline-offset: 2px; }
+        .option-card.selected-correct {
+            border-color: var(--success-green); background: #e6f4ea; color: var(--success-green);
+            transform: scale(1.04); box-shadow: 0 4px 14px rgba(5,118,71,0.18);
+        }
+        .option-card.reveal-correct {
+            border-color: var(--success-green); background: #e6f4ea; color: var(--success-green);
+        }
+        @keyframes wrongShake {
+            0%, 100% { transform: translateX(0); }
+            20%      { transform: translateX(-6px); }
+            40%      { transform: translateX(6px); }
+            60%      { transform: translateX(-4px); }
+            80%      { transform: translateX(4px); }
+        }
+        .option-card.selected-wrong {
+            border-color: var(--error-red); background: #fce8e6; color: var(--error-red);
+            animation: wrongShake 0.35s ease;
+        }
 
-        .score-display { font-size: 3rem; font-weight: 800; color: var(--li-blue); margin: 15px 0; }
-        #loading-text { font-size: 0.8rem; color: var(--li-subtext); margin-top: 15px; }
-        
-        .already-played-msg { color: var(--success-green); font-weight: 700; margin-bottom: 10px; display: none;}
+        /* --- RESULT SCREEN --- */
+        .result-badge {
+            font-size: 3.2rem; margin-bottom: 6px;
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes popIn { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        .result-header { font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--li-subtext); }
+        .score-display {
+            font-size: 3.5rem; font-weight: 900; margin: 6px 0 2px 0; line-height: 1;
+            background: linear-gradient(135deg, #0a66c2, #1a8cff);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .score-max { font-size: 0.78rem; color: var(--li-subtext); margin-bottom: 10px; }
+        .emoji-row { font-size: 1.5rem; letter-spacing: 5px; margin-bottom: 10px; }
+        .score-label { font-size: 1rem; margin-bottom: 8px; color: var(--li-text); }
+        .perf-label {
+            display: inline-block; padding: 5px 16px; border-radius: 20px;
+            font-size: 0.78rem; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 10px;
+        }
+        .perf-perfect { background: #fff8e1; color: #7c3500; border: 1px solid #ffc107; }
+        .perf-great   { background: #e6f4ea; color: var(--success-green); border: 1px solid #a8d5b5; }
+        .perf-ok      { background: #e3f2fd; color: var(--li-blue); border: 1px solid #90caf9; }
+        .perf-bad     { background: #fce8e6; color: var(--error-red); border: 1px solid #ef9a9a; }
+        .best-score-note { font-size: 0.73rem; color: var(--li-subtext); margin-bottom: 18px; }
+        .best-score-note span { color: var(--gold); font-weight: 700; }
+
+        /* --- ERROR BANNER --- */
+        .error-banner {
+            background: #fce8e6; border: 1px solid var(--error-red);
+            color: var(--error-red); border-radius: 8px;
+            padding: 12px 14px; font-size: 0.8rem; margin-bottom: 16px;
+            display: none; text-align: left;
+        }
+        .error-banner.visible { display: block; }
+
+        /* --- TOAST --- */
+        .toast {
+            position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(60px);
+            background: #1a1a1a; color: white; padding: 10px 20px;
+            border-radius: 24px; font-size: 0.85rem; font-weight: 600;
+            opacity: 0; transition: opacity 0.3s, transform 0.3s;
+            pointer-events: none; z-index: 999; white-space: nowrap;
+        }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
     </style>
 </head>
 <body>
@@ -88,39 +237,90 @@
     <div class="title-logo">MISFIT</div>
     <div class="subtitle">Daily Logic Challenge</div>
 
+    <!-- INTRO -->
     <div id="intro-screen" class="screen active">
-        <div id="status-msg" class="already-played-msg">You've completed today's challenge!</div>
-        <div class="how-to-list">
-            <div class="how-to-item"><div class="icon">🔍</div><div class="how-to-text"><b>Spot the anomaly</b><span>Find the word that doesn't belong.</span></div></div>
-            <div class="how-to-item"><div class="icon">⚡</div><div class="how-to-text"><b>Beat the clock</b><span>Faster answers boost your score.</span></div></div>
-            <div class="how-to-item"><div class="icon">🗓️</div><div class="how-to-text"><b>Daily Ritual</b><span>5 new challenges every 24h.</span></div></div>
+        <div id="error-banner" class="error-banner">
+            ⚠️ Could not load today's puzzle. Check your connection and refresh.
         </div>
-        <button id="start-btn" class="btn-play" onclick="initGame()" disabled>Loading Puzzle...</button>
-        <p id="loading-text">Connecting to server...</p>
+        <button id="start-btn" class="btn-play" disabled>Loading…</button>
+        <div class="how-to-footer">
+            <p class="how-to-title">How to play</p>
+            <div class="steps-list">
+                <div class="step">
+                    <div class="step-icon">🏷️</div>
+                    <div class="step-text">
+                        <strong>Read the Topic</strong>
+                        <span>A category is shown at the top of the screen.</span>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-icon">🔍</div>
+                    <div class="step-text">
+                        <strong>Find the Misfit</strong>
+                        <span>One of the 4 words does <em>not</em> belong to the topic.</span>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-icon">⚡</div>
+                    <div class="step-text">
+                        <strong>Be fast, score big</strong>
+                        <span>The quicker you answer, the more points you earn.</span>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-icon">🔥</div>
+                    <div class="step-text">
+                        <strong>Build a streak</strong>
+                        <span>Consecutive correct answers unlock a streak bonus!</span>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-icon">📅</div>
+                    <div class="step-text">
+                        <strong>One game per day</strong>
+                        <span>A fresh set of 5 puzzles drops every 24 hours.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
+    <!-- GAME -->
     <div id="game-screen" class="screen">
+        <div class="game-header">
+            <div class="question-counter" id="question-counter">Question 1 / 5</div>
+            <div class="score-live" id="score-live">0 pts</div>
+        </div>
         <div class="progress-bar" id="dots-container"></div>
         <div class="timer-container"><div id="timer-fill" class="timer-fill"></div></div>
-        <div class="hint-label">Topic</div>
-        <div class="hint-value" id="current-hint">...</div>
-        <div class="grid" id="options-grid"></div>
+        <div class="topic-area">
+            <div class="hint-label">Find the misfit in</div>
+            <div id="current-hint" class="hint-value">…</div>
+        </div>
+        <div class="streak-badge" id="streak-badge">🔥 <span id="streak-count">2</span>x Streak!</div>
+        <fieldset class="grid" id="options-grid" aria-label="Answer options" style="border:none;padding:0;margin:0;"></fieldset>
     </div>
 
+    <!-- RESULT -->
     <div id="result-screen" class="screen">
-        <div style="font-size: 1rem; font-weight: 600;">CHALLENGE COMPLETE</div>
+        <div class="result-badge" id="result-badge">🎯</div>
+        <div class="result-header">Daily Summary</div>
         <div class="score-display" id="final-score">0</div>
-        <p style="color: var(--li-subtext); font-size: 0.9rem; margin-bottom: 25px;">You found <span id="correct-count">0</span>/5 Misfits.</p>
-        <button class="btn-play" onclick="shareResults()">Share Score 🚀</button>
-        <p style="font-size: 0.75rem; margin-top: 20px; color: var(--li-subtext);">Come back tomorrow for a new puzzle!</p>
+        <div class="score-max" id="score-max"></div>
+        <div class="emoji-row" id="emoji-row"></div>
+        <div class="perf-label" id="perf-label"></div>
+        <div class="score-label">Correct: <strong><span id="correct-count">0</span>/<span id="total-count">5</span></strong></div>
+        <div class="best-score-note" id="best-score-note"></div>
+        <button class="btn-play" id="share-btn">Share Score 🚀</button>
     </div>
 </div>
 
+<div class="toast" id="toast"></div>
+
 <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
+    import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
     import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
 
-    // --- TA CONFIG FIREBASE ICI ---
     const firebaseConfig = {
         apiKey: "AIzaSyBEG9mOSns3-Gw1vAEnZILaIRKrVnweHdo",
         authDomain: "misfit-game.firebaseapp.com",
@@ -131,159 +331,323 @@
     };
 
     const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
+    const db  = getFirestore(app);
 
-    let puzzles = [];
-    let currentIdx = 0;
-    let totalScore = 0;
-    let correctAnswers = 0;
-    let timeLeft = 100;
-    let timerId;
+    // ─── State ────────────────────────────────────────────────────────────────
+    let puzzles         = [];
+    let currentIdx      = 0;
+    let totalScore      = 0;
+    let correctAnswers  = 0;
+    let timerId         = null;
+    let isTransitioning = false;
+    let questionResults = [];   // '✅' ou '❌' par question
+    let timerStart      = 0;
+    let currentStreak   = 0;   // ✅ NEW: streak consécutif
 
-    async function loadFirebaseData() {
-        const todayNum = new Date().getDate().toString(); 
-        
-        // VÉRIFICATION : A-t-il déjà joué aujourd'hui ?
-        const lastPlayed = localStorage.getItem('misfit_last_day');
-        if (lastPlayed === todayNum) {
-            showAlreadyPlayed(localStorage.getItem('misfit_last_score'), localStorage.getItem('misfit_last_correct'));
+    const TIMER_DURATION_MS = 15000;  // ⬆️ 15 s par question (était 10 s)
+    const MAX_SCORE_PER_Q   = 500;
+    const MIN_SCORE_PER_Q   = 100;
+    const STREAK_BONUS      = 50;    // pts bonus par niveau de streak (≥ 2)
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    function getTodayKey() {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    function showToast(msg, duration = 2000) {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.classList.add('show');
+        setTimeout(() => t.classList.remove('show'), duration);
+    }
+
+    function showScreen(id) {
+        ['intro-screen','game-screen','result-screen'].forEach(s => {
+            document.getElementById(s).classList.toggle('active', s === id);
+        });
+    }
+
+    /** FIX: Fisher-Yates shuffle — sort(() => Math.random()-0.5) est biaisé */
+    function shuffle(arr) {
+        const a = [...arr];
+        for (let i = a.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [a[i], a[j]] = [a[j], a[i]];
+        }
+        return a;
+    }
+
+    // ─── Load ─────────────────────────────────────────────────────────────────
+
+    async function loadData() {
+        const todayKey   = getTodayKey();
+        const lastPlayed = localStorage.getItem('misfit_day');
+
+        if (lastPlayed === todayKey) {
+            totalScore      = Number(localStorage.getItem('misfit_score'))   || 0;
+            correctAnswers  = Number(localStorage.getItem('misfit_correct')) || 0;
+            questionResults = JSON.parse(localStorage.getItem('misfit_results') || '[]');
+            showResults();
             return;
         }
 
-        const docRef = doc(db, "daily_puzzles", todayNum);
         try {
-            const docSnap = await getDoc(docRef);
-            if (docSnap.exists()) {
-                puzzles = docSnap.data().questions;
-                document.getElementById('start-btn').disabled = false;
-                document.getElementById('start-btn').innerText = "Play Now";
-                document.getElementById('loading-text').innerText = "Puzzle #" + todayNum + " is live.";
-            } else {
-                document.getElementById('loading-text').innerText = "No puzzle found for today.";
-            }
-        } catch (e) {
-            console.error(e);
-            document.getElementById('loading-text').innerText = "Check your connection.";
+            const snap = await getDoc(doc(db, "daily_puzzles", todayKey));
+            if (!snap.exists()) throw new Error("No puzzle for today.");
+
+            puzzles = snap.data().questions;
+            const btn = document.getElementById('start-btn');
+            btn.textContent = "Play Now ▶";
+            btn.disabled    = false;
+        } catch (err) {
+            console.error("Firebase error:", err);
+            document.getElementById('error-banner').classList.add('visible');
         }
     }
 
-    function showAlreadyPlayed(score, correct) {
-        document.getElementById('status-msg').style.display = "block";
-        document.getElementById('start-btn').innerText = "Completed";
-        document.getElementById('start-btn').disabled = true;
-        document.getElementById('loading-text').innerText = "See you tomorrow!";
-        
-        // Optionnel : On peut aussi rediriger vers l'écran de fin direct
-        setTimeout(() => {
-            totalScore = score;
-            correctAnswers = correct;
-            endGame();
-        }, 1500);
-    }
+    // ─── Game init ────────────────────────────────────────────────────────────
 
-    window.initGame = function() {
-        switchScreen('game-screen');
+    function initGame() {
+        showScreen('game-screen');
         createDots();
         loadLevel();
-    };
-
-    function switchScreen(id) {
-        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-        document.getElementById(id).classList.add('active');
     }
+
+    document.getElementById('start-btn').addEventListener('click', initGame);
+    document.getElementById('share-btn').addEventListener('click', shareResults);
 
     function createDots() {
         const container = document.getElementById('dots-container');
-        container.innerHTML = '';
-        puzzles.forEach(() => {
-            const d = document.createElement('div');
-            d.className = 'dot';
-            container.appendChild(d);
-        });
+        container.innerHTML = puzzles.map((_, i) =>
+            `<div class="dot" aria-label="Question ${i+1}"></div>`
+        ).join('');
     }
 
+    // ─── Level ────────────────────────────────────────────────────────────────
+
     function loadLevel() {
-        if(currentIdx >= puzzles.length) return endGame();
+        if (currentIdx >= puzzles.length) return finishGame();
+
+        isTransitioning = false;
         const p = puzzles[currentIdx];
-        document.getElementById('current-hint').innerText = p.topic;
-        const dots = document.querySelectorAll('.dot');
-        dots[currentIdx].classList.add('active');
+
+        document.getElementById('current-hint').textContent = p.topic;
+        document.getElementById('question-counter').textContent = `Question ${currentIdx + 1} / ${puzzles.length}`;
+        updateScoreLive();
+
+        // FIX: re-appliquer TOUS les états passés (sinon les dots repassent au gris)
+        document.querySelectorAll('.dot').forEach((d, i) => {
+            d.className = 'dot';
+            if (i < questionResults.length) {
+                d.classList.add(questionResults[i] === '✅' ? 'correct' : 'wrong');
+            } else if (i === currentIdx) {
+                d.classList.add('active');
+            }
+        });
+
+        updateStreakBadge();
+
+        // FIX: Fisher-Yates via shuffle()
         const grid = document.getElementById('options-grid');
         grid.innerHTML = '';
-        [...p.options].sort(() => Math.random() - 0.5).forEach(opt => {
-            const card = document.createElement('div');
-            card.className = 'option-card';
-            card.innerText = opt;
-            card.onclick = () => handleChoice(opt);
-            grid.appendChild(card);
+        shuffle(p.options).forEach(opt => {
+            const btn = document.createElement('button');
+            btn.className   = 'option-card';
+            btn.textContent = opt;
+            btn.addEventListener('click', () => handleChoice(opt, btn));
+            grid.appendChild(btn);
         });
+
         startTimer();
     }
 
+    function updateScoreLive() {
+        document.getElementById('score-live').textContent = `${totalScore} pts`;
+    }
+
+    function updateStreakBadge() {
+        const badge   = document.getElementById('streak-badge');
+        const countEl = document.getElementById('streak-count');
+        if (currentStreak >= 2) {
+            countEl.textContent = currentStreak;
+            badge.classList.add('visible');
+        } else {
+            badge.classList.remove('visible');
+        }
+    }
+
+    // ─── Timer ────────────────────────────────────────────────────────────────
+
     function startTimer() {
-        timeLeft = 100;
         clearInterval(timerId);
+        timerStart = performance.now();
+        const fill = document.getElementById('timer-fill');
+        fill.style.width = '100%';
+        fill.className   = 'timer-fill';
+
         timerId = setInterval(() => {
-            timeLeft -= 1.5;
-            document.getElementById('timer-fill').style.width = timeLeft + "%";
-            if(timeLeft <= 0) handleChoice(null);
-        }, 100);
+            const elapsed = performance.now() - timerStart;
+            const pct     = Math.max(0, 100 - (elapsed / TIMER_DURATION_MS) * 100);
+            fill.style.width = pct + '%';
+
+            // FIX: classes exclusives pour éviter le cumul warning+danger
+            if      (pct < 20) fill.className = 'timer-fill danger';
+            else if (pct < 45) fill.className = 'timer-fill warning';
+            else               fill.className = 'timer-fill';
+
+            if (pct <= 0) handleChoice(null, null);
+        }, 80);
     }
 
-    function handleChoice(choice) {
+    function calcScore() {
+        const elapsed = performance.now() - timerStart;
+        const ratio   = Math.max(0, 1 - elapsed / TIMER_DURATION_MS);
+        return Math.round(MIN_SCORE_PER_Q + (MAX_SCORE_PER_Q - MIN_SCORE_PER_Q) * ratio);
+    }
+
+    // ─── Choice handler ───────────────────────────────────────────────────────
+
+    function handleChoice(choice, btnElement) {
+        if (isTransitioning) return;
+        isTransitioning = true;
         clearInterval(timerId);
-        const dots = document.querySelectorAll('.dot');
-        if(choice === puzzles[currentIdx].answer) {
-            totalScore += Math.round(timeLeft * 10);
+
+        const correct = puzzles[currentIdx].answer;
+        const dots    = document.querySelectorAll('.dot');
+        const buttons = document.querySelectorAll('.option-card');
+
+        buttons.forEach(b => { b.disabled = true; });
+
+        if (choice === correct) {
+            btnElement.classList.add('selected-correct');
+            dots[currentIdx].classList.remove('active');
+            dots[currentIdx].classList.add('correct');
+
+            currentStreak++;
+            let pts   = calcScore();
+            let bonus = 0;
+            if (currentStreak >= 2) {
+                bonus = STREAK_BONUS * (currentStreak - 1);
+                pts  += bonus;
+            }
+            totalScore += pts;
             correctAnswers++;
-            dots[currentIdx].classList.replace('active', 'correct');
+            questionResults.push('✅');
+            updateScoreLive();
+
+            const msg = bonus > 0 ? `+${pts} pts 🔥 (+${bonus} streak!)` : `+${pts} pts ✓`;
+            showToast(msg, 1500);
         } else {
-            dots[currentIdx].classList.replace('active', 'wrong');
+            // FIX: reveal correct answer même sur timeout (choice === null)
+            if (btnElement) btnElement.classList.add('selected-wrong');
+            buttons.forEach(b => { if (b.textContent === correct) b.classList.add('reveal-correct'); });
+            dots[currentIdx].classList.remove('active');
+            dots[currentIdx].classList.add('wrong');
+            currentStreak = 0;  // reset streak
+            questionResults.push('❌');
+
+            if (choice === null) showToast("⏱ Time's up!", 1200);
         }
+
         currentIdx++;
-        setTimeout(loadLevel, 600);
+        setTimeout(loadLevel, 1600);
     }
 
-    function endGame() {
-        // SAUVEGARDE LOCALE
-        const todayNum = new Date().getDate().toString();
-        localStorage.setItem('misfit_last_day', todayNum);
-        localStorage.setItem('misfit_last_score', totalScore);
-        localStorage.setItem('misfit_last_correct', correctAnswers);
+    // ─── Finish ───────────────────────────────────────────────────────────────
 
-        switchScreen('result-screen');
-        document.getElementById('final-score').innerText = totalScore;
-        document.getElementById('correct-count').innerText = correctAnswers;
+    function finishGame() {
+        const todayKey = getTodayKey();
+        localStorage.setItem('misfit_day',     todayKey);
+        localStorage.setItem('misfit_score',   String(totalScore));
+        localStorage.setItem('misfit_correct', String(correctAnswers));
+        localStorage.setItem('misfit_results', JSON.stringify(questionResults));
+        localStorage.setItem('misfit_total',   String(puzzles.length));
+        showResults();
     }
 
-    window.shareResults = function() {
-        const dots = document.querySelectorAll('.dot');
-        let emojiGrid = "";
-        
-        // Si on recharge la page, on n'a plus les classes CSS "correct/wrong" dans le DOM, 
-        // alors on génère une grille simple si les dots sont vides
-        if (dots.length > 0 && dots[0].className === "dot") {
-            emojiGrid = "🎮 Challenge Completed!";
+    function showResults() {
+        const total       = puzzles.length || Number(localStorage.getItem('misfit_total')) || 5;
+        const maxPossible = total * MAX_SCORE_PER_Q;
+        const ratio       = totalScore / maxPossible;
+
+        // Badge de performance
+        let badge = '🎯', perfClass = 'perf-ok', perfText = '👍 Good job, keep it up!';
+        if (correctAnswers === total && ratio >= 0.8) {
+            badge = '🏆'; perfClass = 'perf-perfect'; perfText = '🔥 Perfect! Flawless run!';
+        } else if (correctAnswers === total) {
+            badge = '🌟'; perfClass = 'perf-great';   perfText = '⭐ All correct! Well done!';
+        } else if (correctAnswers < Math.ceil(total * 0.4)) {
+            badge = '💪'; perfClass = 'perf-bad';     perfText = '📚 Keep practicing!';
+        }
+
+        document.getElementById('result-badge').textContent   = badge;
+        document.getElementById('final-score').textContent    = 0;
+        document.getElementById('score-max').textContent      = `/ ${maxPossible} pts max`;
+        document.getElementById('correct-count').textContent  = correctAnswers;
+        document.getElementById('total-count').textContent    = total;
+        document.getElementById('emoji-row').textContent      = questionResults.join(' ');
+
+        const perfEl = document.getElementById('perf-label');
+        perfEl.className  = `perf-label ${perfClass}`;
+        perfEl.textContent = perfText;
+
+        // Meilleur score historique
+        const prevBest = Number(localStorage.getItem('misfit_best_score')) || 0;
+        const noteEl   = document.getElementById('best-score-note');
+        if (totalScore > prevBest) {
+            localStorage.setItem('misfit_best_score', String(totalScore));
+            noteEl.innerHTML = prevBest > 0
+                ? `🏅 New personal best! (was <span>${prevBest}</span> pts)`
+                : `🏅 First game — this is your score to beat!`;
+        } else if (prevBest > 0) {
+            noteEl.innerHTML = `Best score: <span>${prevBest}</span> pts`;
+        }
+
+        showScreen('result-screen');
+        animateScore(totalScore);
+    }
+
+    function animateScore(target) {
+        const el    = document.getElementById('final-score');
+        let current = 0;
+        const step  = Math.max(1, Math.ceil(target / 50));
+        const id    = setInterval(() => {
+            current = Math.min(current + step, target);
+            el.textContent = current;
+            if (current >= target) clearInterval(id);
+        }, 25);
+    }
+
+    // ─── Share ────────────────────────────────────────────────────────────────
+
+    function shareResults() {
+        const total       = puzzles.length || Number(localStorage.getItem('misfit_total')) || 5;
+        const maxPossible = total * MAX_SCORE_PER_Q;
+        const emojis      = questionResults.join('');
+        const text = [
+            `🔍 MISFIT — ${getTodayKey()}`,
+            `🏆 Score: ${totalScore} / ${maxPossible}`,
+            emojis,
+            `✅ ${correctAnswers}/${total} Spotted`,
+            ``,
+            `Play here: ${globalThis.location.href}`
+        ].join('\n');
+
+        if (navigator.share) {
+            navigator.share({ title: 'MISFIT', text }).catch(() => {});
+        } else if (navigator.clipboard) {
+            navigator.clipboard.writeText(text)
+                .then(()  => showToast('Score copied to clipboard! 📋'))
+                .catch(()  => showToast('Could not copy — try manually.'));
         } else {
-            dots.forEach(dot => {
-                if (dot.classList.contains('correct')) emojiGrid += "🟩 ";
-                else if (dot.classList.contains('wrong')) emojiGrid += "🟥 ";
-                else emojiGrid += "⬜ "; 
-            });
+            showToast('Could not copy — try manually.');
         }
+    }
 
-        const dayNum = new Date().getDate();
-        const shareText = `🔍 MISFIT #${dayNum}\n\n${emojiGrid}\n\n🏆 Score: ${totalScore}\n✅ ${correctAnswers}/5 Spotted\n\nPlay here: ${window.location.origin + window.location.pathname}`;
-
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(shareText).then(() => {
-                alert("Score copied to clipboard!");
-            });
-        }
-    };
-
-    loadFirebaseData();
+    // ─── Boot ─────────────────────────────────────────────────────────────────
+    await loadData();
 </script>
-
 </body>
 </html>
