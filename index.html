@@ -94,6 +94,17 @@
         }
         .btn-play:active:not(:disabled) { transform: scale(0.97); }
         .btn-play:disabled { background: #ccc; cursor: not-allowed; box-shadow: none; }
+        /* État de chargement : shimmer animé */
+        @keyframes shimmer {
+            from { background-position: 200% center; }
+            to   { background-position: -200% center; }
+        }
+        .btn-play.is-loading {
+            background: linear-gradient(90deg, #0856a0 0%, #2690ff 45%, #0856a0 100%);
+            background-size: 200% auto;
+            animation: shimmer 1.5s linear infinite;
+            cursor: wait;
+        }
 
         /* --- GAME HEADER (counter + live score) --- */
         .game-header {
@@ -242,7 +253,7 @@
         <div id="error-banner" class="error-banner">
             ⚠️ Could not load today's puzzle. Check your connection and refresh.
         </div>
-        <button id="start-btn" class="btn-play" disabled>Loading…</button>
+        <button id="start-btn" class="btn-play is-loading" disabled>Loading</button>
         <div class="how-to-footer">
             <p class="how-to-title">How to play</p>
             <div class="steps-list">
@@ -319,7 +330,7 @@
 
 <script type="module">
     import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
-    import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
+    import { initializeFirestore, persistentLocalCache, doc, getDoc, getDocFromCache, setDoc } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
 
     const firebaseConfig = {
         apiKey: "AIzaSyBEG9mOSns3-Gw1vAEnZILaIRKrVnweHdo",
@@ -331,7 +342,9 @@
     };
 
     const app = initializeApp(firebaseConfig);
-    const db  = getFirestore(app);
+    // persistentLocalCache : stocke les documents Firestore dans IndexedDB.
+    // Le puzzle du jour est servi instantanément dès la 2ème visite (même navigateur).
+    const db  = initializeFirestore(app, { localCache: persistentLocalCache() });
 
     // ─── State ────────────────────────────────────────────────────────────────
     let puzzles         = [];
@@ -343,6 +356,7 @@
     let questionResults = [];   // '✅' ou '❌' par question
     let timerStart      = 0;
     let currentStreak   = 0;   // ✅ NEW: streak consécutif
+    let cachedIp        = '';  // IP publique mise en cache au premier appel
 
     const TIMER_DURATION_MS = 15000;  // ⬆️ 15 s par question (était 10 s)
     const MAX_SCORE_PER_Q   = 500;
@@ -389,13 +403,125 @@
         return a;
     }
 
+    /**
+     * Lecture cache-first : IndexedDB d'abord (~5 ms), réseau si absent.
+     * Réduit drastiquement le temps de chargement dès la 2ème visite.
+     */
+    async function getDocFast(docRef) {
+        try {
+            return await getDocFromCache(docRef);
+        } catch (e) {
+            console.warn('cache miss, fetching from network:', e);
+            return await getDoc(docRef);
+        }
+    }
+
+    // ─── Device ID v4 : IP publique uniquement ───────────────────────────────
+    //
+    // V1/V2 : userAgent + canvas       → différent par navigateur ❌
+    // V3    : IP + hardware (platform, screen…) → Brave randomise screen en privé ❌
+    // V4    : IP seule, hashée en SHA-256
+    //         → identique dans Firefox / Chrome / Brave / privé / normal ✅
+    //
+    // Fallback si IP indisponible : ID aléatoire scopé à la session (sessionStorage).
+    // Dans ce cas le joueur POURRAIT rejouer en rouvrant la fenêtre privée,
+    // mais c'est acceptable si le service IP est hors-ligne.
+
+    /** Récupère l'IP publique. Mise en cache dans sessionStorage pour la session. */
+    async function getPublicIp() {
+        try {
+            const c = sessionStorage.getItem('misfit_ip');
+            if (c) { cachedIp = c; return c; }
+        } catch (e) { console.warn('ss ip read', e); }
+
+        try {
+            const ctrl = new AbortController();
+            const tid  = setTimeout(() => ctrl.abort(), 2000);
+            const res  = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
+            clearTimeout(tid);
+            cachedIp = (await res.json()).ip || '';
+            try { sessionStorage.setItem('misfit_ip', cachedIp); } catch (e) { console.warn('ss ip write', e); }
+            return cachedIp;
+        } catch (e) {
+            console.warn('IP fetch failed — fallback to session ID:', e);
+            return '';
+        }
+    }
+
+    /**
+     * Retourne un ID stable basé sur le hash SHA-256 de l'IP publique.
+     * Pas de cache localStorage : l'IP étant en sessionStorage, le recalcul
+     * est instantané et évite tout problème d'ID périmé entre sessions.
+     */
+    async function getDeviceId() {
+        const ip = await getPublicIp();
+
+        if (!ip) {
+            // Fallback : ID aléatoire scopé à la session courante
+            let sid = null;
+            try { sid = sessionStorage.getItem('misfit_session_id'); } catch (e) { console.warn('ss sid read', e); }
+            if (!sid) {
+                const arr = new Uint8Array(12);
+                crypto.getRandomValues(arr);
+                sid = Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+                try { sessionStorage.setItem('misfit_session_id', sid); } catch (e) { console.warn('ss sid write', e); }
+            }
+            return sid;
+        }
+
+        // Hash SHA-256 de l'IP → 24 chars hex
+        const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip));
+        return Array.from(new Uint8Array(buf))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('')
+            .substring(0, 24);
+    }
+
+    /** Vérifie dans Firestore si ce device a déjà joué aujourd'hui. */
+    async function checkAlreadyPlayed(deviceId, todayKey) {
+        try {
+            const snap = await getDocFast(doc(db, "play_records", `${deviceId}_${todayKey}`));
+            return snap.exists() ? snap.data() : null;
+        } catch (e) {
+            console.warn("checkAlreadyPlayed failed (fail-open):", e);
+            return null;
+        }
+    }
+
+    /** Sauvegarde la partie dans Firestore (cross-session, anti-navigation privée). */
+    async function savePlayRecord(deviceId, todayKey) {
+        try {
+            await setDoc(doc(db, "play_records", `${deviceId}_${todayKey}`), {
+                score:   totalScore,
+                correct: correctAnswers,
+                results: questionResults,
+                total:   puzzles.length,
+                ip:      cachedIp,
+                ts:      new Date().toISOString(),
+            });
+        } catch (e) {
+            console.warn("Could not save play record to Firestore:", e);
+        }
+    }
+
     // ─── Load ─────────────────────────────────────────────────────────────────
 
     async function loadData() {
         const todayKey   = getTodayKey();
         const lastPlayed = localStorage.getItem('misfit_day');
+        const btn        = document.getElementById('start-btn');
 
+        // Animation de points pendant le chargement
+        let dotCount = 0;
+        const dotTimer = setInterval(() => {
+            dotCount = (dotCount + 1) % 4;
+            btn.textContent = 'Loading' + '·'.repeat(dotCount);
+        }, 350);
+
+        // ── Chemin rapide : localStorage a déjà la partie du jour ──────────
         if (lastPlayed === todayKey) {
+            clearInterval(dotTimer);
+            btn.classList.remove('is-loading');
             totalScore      = Number(localStorage.getItem('misfit_score'))   || 0;
             correctAnswers  = Number(localStorage.getItem('misfit_correct')) || 0;
             questionResults = JSON.parse(localStorage.getItem('misfit_results') || '[]');
@@ -404,16 +530,62 @@
         }
 
         try {
-            const snap = await getDoc(doc(db, "daily_puzzles", getTodayPuzzleId()));
-            if (!snap.exists()) throw new Error("No puzzle for today.");
+            // ── deviceId lancé immédiatement (appelle getPublicIp en interne) ──
+            const deviceIdPromise = getDeviceId();
 
+            // ── checkAlreadyPlayed démarre dès que l'ID est prêt,
+            //    EN PARALLÈLE avec le chargement du puzzle ─────────────────────
+            const recordPromise = deviceIdPromise.then(did => checkAlreadyPlayed(did, todayKey));
+
+            // ── Un seul await pour puzzle + deviceId + play record ────────────
+            const [snap, , record] = await Promise.all([
+                getDocFast(doc(db, "daily_puzzles", getTodayPuzzleId())),
+                deviceIdPromise,
+                recordPromise,
+            ]);
+
+            if (!snap.exists()) {
+                throw Object.assign(new Error("NO_DOC"), { code: 'not-found' });
+            }
             puzzles = snap.data().questions;
-            const btn = document.getElementById('start-btn');
+            if (!Array.isArray(puzzles) || puzzles.length === 0) {
+                throw Object.assign(new Error("NO_QUESTIONS"), { code: 'malformed' });
+            }
+
+            // ── Déjà joué (navigation privée détectée via Firestore) ──────────
+            if (record) {
+                totalScore      = record.score   || 0;
+                correctAnswers  = record.correct || 0;
+                questionResults = record.results || [];
+                localStorage.setItem('misfit_day',     todayKey);
+                localStorage.setItem('misfit_score',   String(totalScore));
+                localStorage.setItem('misfit_correct', String(correctAnswers));
+                localStorage.setItem('misfit_results', JSON.stringify(questionResults));
+                localStorage.setItem('misfit_total',   String(puzzles.length));
+                showResults();
+                return;
+            }
+
             btn.textContent = "Play Now ▶";
             btn.disabled    = false;
+
         } catch (err) {
             console.error("Firebase error:", err);
-            document.getElementById('error-banner').classList.add('visible');
+            const banner = document.getElementById('error-banner');
+            if (err.code === 'permission-denied') {
+                banner.textContent = "⚠️ Firestore permission denied. Update your security rules in Firebase Console.";
+            } else if (err.message === 'NO_DOC') {
+                banner.textContent = `⚠️ No puzzle found for day ${getTodayPuzzleId()} in Firestore. Please add the puzzle data.`;
+            } else if (err.message === 'NO_QUESTIONS') {
+                banner.textContent = "⚠️ Puzzle data is malformed. Expected a 'questions' array in the document.";
+            } else {
+                banner.textContent = "⚠️ Could not load today's puzzle. Check your connection and refresh.";
+            }
+            banner.classList.add('visible');
+        } finally {
+            // Toujours nettoyer l'état de chargement, quelle que soit l'issue
+            clearInterval(dotTimer);
+            btn.classList.remove('is-loading');
         }
     }
 
@@ -574,6 +746,10 @@
         localStorage.setItem('misfit_correct', String(correctAnswers));
         localStorage.setItem('misfit_results', JSON.stringify(questionResults));
         localStorage.setItem('misfit_total',   String(puzzles.length));
+
+        // ── Sauvegarder dans Firestore pour bloquer la navigation privée ───
+        getDeviceId().then(deviceId => savePlayRecord(deviceId, todayKey));
+
         showResults();
     }
 
@@ -657,6 +833,17 @@
     }
 
     // ─── Boot ─────────────────────────────────────────────────────────────────
+
+    // DEV HELPER : ouvrir index.html?reset vide tout le cache MISFIT
+    if (new URLSearchParams(location.search).has('reset')) {
+        const keys = ['misfit_did','misfit_ip','misfit_device_id', // device ID (toutes versions)
+                      'misfit_day','misfit_score','misfit_correct',
+                      'misfit_results','misfit_total','misfit_best_score'];
+        keys.forEach(k => { localStorage.removeItem(k); sessionStorage.removeItem(k); });
+        console.info('🧹 MISFIT cache cleared — reloading…');
+        location.replace(location.pathname); // retire ?reset de l'URL
+    }
+
     await loadData();
 </script>
 </body>
