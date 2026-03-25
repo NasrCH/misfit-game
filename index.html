@@ -219,8 +219,6 @@
         .perf-great   { background: #e6f4ea; color: var(--success-green); border: 1px solid #a8d5b5; }
         .perf-ok      { background: #e3f2fd; color: var(--li-blue); border: 1px solid #90caf9; }
         .perf-bad     { background: #fce8e6; color: var(--error-red); border: 1px solid #ef9a9a; }
-        .best-score-note { font-size: 0.73rem; color: var(--li-subtext); margin-bottom: 18px; }
-        .best-score-note span { color: var(--gold); font-weight: 700; }
 
         /* --- ERROR BANNER --- */
         .error-banner {
@@ -273,6 +271,28 @@
             padding: 12px 14px; margin-top: 10px;
         }
         .lb-encourage strong { color: var(--li-blue); }
+
+        /* --- DAILY STREAK --- */
+        .streak-result {
+            display: none; /* caché par défaut — .visible l'affiche */
+        }
+        .streak-result.visible {
+            display: inline-flex; align-items: center; gap: 7px;
+            background: linear-gradient(135deg, #fff3e0, #ffe0b2);
+            border: 1px solid #ffb74d; border-radius: 20px;
+            padding: 6px 16px; font-size: 0.86rem; font-weight: 700; color: #bf360c;
+            margin-bottom: 14px;
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .streak-motivation {
+            display: none; /* caché par défaut */
+        }
+        .streak-motivation.visible {
+            display: inline-block; font-size: 0.78rem; font-weight: 700; color: #bf360c;
+            background: linear-gradient(135deg, #fff3e0, #ffe0b2);
+            border: 1px solid #ffb74d; border-radius: 20px;
+            padding: 5px 14px; margin-bottom: 16px;
+        }
     </style>
 </head>
 <body>
@@ -334,6 +354,7 @@
         <div class="pseudo-icon">👤</div>
         <h3 class="pseudo-title">What's your name?</h3>
         <p class="pseudo-sub">Your score will appear on the daily leaderboard 🏆</p>
+        <div id="streak-motivation" class="streak-motivation"></div>
         <input  id="pseudo-input" class="pseudo-input" type="text" aria-label="Your nickname"
                 placeholder="Enter your nickname…" maxlength="20" autocomplete="off" spellcheck="false">
         <div id="pseudo-error" class="pseudo-error"></div>
@@ -364,7 +385,7 @@
         <div class="emoji-row" id="emoji-row"></div>
         <div class="perf-label" id="perf-label"></div>
         <div class="score-label">Correct: <strong><span id="correct-count">0</span>/<span id="total-count">5</span></strong></div>
-        <div class="best-score-note" id="best-score-note"></div>
+        <div id="streak-result" class="streak-result"></div>
         <button class="btn-play" id="share-btn">Share Score 🚀</button>
 
         <!-- Leaderboard quotidien -->
@@ -407,6 +428,7 @@
     let currentStreak   = 0;
     let cachedIp        = '';
     let playerPseudo    = localStorage.getItem('misfit_pseudo') || '';
+    let dailyStreak     = 0;   // streak quotidien chargé depuis Firestore
 
     const TIMER_DURATION_MS = 15000;  // ⬆️ 15 s par question (était 10 s)
     const MAX_SCORE_PER_Q   = 500;
@@ -419,6 +441,93 @@
     function getTodayKey() {
         const d = new Date();
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    function getYesterdayKey() {
+        const d = new Date();
+        d.setDate(d.getDate() - 1);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    /**
+     * Lit le streak depuis Firestore pour un pseudo donné.
+     * Retourne { streak, lastPlayedDay } ou { streak: 0, lastPlayedDay: '' }.
+     *
+     * Règle Firestore requise :
+     *   match /streaks/{doc} { allow read, write: if true; }
+     */
+    async function loadStreak(pseudo) {
+        if (!pseudo) return { streak: 0, lastPlayedDay: '' };
+        const slug = pseudo.toLowerCase().trim().replaceAll(/[^a-z0-9]/g, '_');
+        try {
+            const snap = await getDoc(doc(db, "streaks", slug));
+            if (snap.exists()) return snap.data();
+
+            // ── Migration : pas encore de document streak ─────────────────────
+            // Vérifier si le joueur a joué hier dans la collection scores
+            // (données existantes avant le déploiement de la feature streak).
+            // Si oui → on lui retourne lastPlayedDay = hier pour ne pas briser
+            // la continuité lors de son premier updateStreak() aujourd'hui.
+            const yesterdayKey  = getYesterdayKey();
+            const snapYesterday = await getDoc(doc(db, "scores", `${yesterdayKey}_${slug}`));
+            if (snapYesterday.exists()) {
+                return { streak: 1, lastPlayedDay: yesterdayKey };
+            }
+
+            return { streak: 0, lastPlayedDay: '' };
+        } catch (e) {
+            console.warn('loadStreak failed:', e);
+            return { streak: 0, lastPlayedDay: '' };
+        }
+    }
+
+    /**
+     * Calcule et sauvegarde le nouveau streak dans Firestore.
+     * - Joué hier      → streak + 1
+     * - Déjà joué auj. → inchangé (idempotent, safe à appeler plusieurs fois)
+     * - Interruption   → reset à 1
+     */
+    async function updateStreak(pseudo) {
+        if (!pseudo) return 0;
+        const slug         = pseudo.toLowerCase().trim().replaceAll(/[^a-z0-9]/g, '_');
+        const todayKey     = getTodayKey();
+        const yesterdayKey = getYesterdayKey();
+        const data         = await loadStreak(pseudo);
+        const lastDay      = data.lastPlayedDay || '';
+        let   streak       = data.streak || 0;
+
+        if (lastDay === todayKey) {
+            dailyStreak = streak; // déjà compté aujourd'hui, rien à faire
+            return streak;
+        } else if (lastDay === yesterdayKey) {
+            streak += 1; // continuité ✅
+        } else {
+            streak = 1;  // interruption ou première partie
+        }
+
+        dailyStreak = streak;
+
+        try {
+            await setDoc(doc(db, "streaks", slug), {
+                pseudo:        pseudo,
+                streak:        streak,
+                lastPlayedDay: todayKey,
+                updatedAt:     new Date().toISOString(),
+            });
+        } catch (e) {
+            console.warn('updateStreak save failed:', e);
+        }
+
+        return streak;
+    }
+
+    /** Retourne le label du streak avec emoji selon le palier. */
+    function getStreakLabel(streak) {
+        if (streak >= 365) return `🔥 ${streak} days — Legendary! 👑`;
+        if (streak >= 30)  return `🔥 ${streak} day streak! 🏅`;
+        if (streak >= 7)   return `🔥 ${streak} day streak! ⚡`;
+        if (streak === 1)  return `🔥 Day 1 — come back tomorrow!`;
+        return `🔥 ${streak} day streak!`;
     }
 
     /**
@@ -666,6 +775,11 @@
             totalScore      = Number(localStorage.getItem('misfit_score'))   || 0;
             correctAnswers  = Number(localStorage.getItem('misfit_correct')) || 0;
             questionResults = JSON.parse(localStorage.getItem('misfit_results') || '[]');
+            // Charger le streak depuis Firestore (persistant cross-device)
+            if (playerPseudo) {
+                const sd = await loadStreak(playerPseudo);
+                dailyStreak = sd.streak || 0;
+            }
             showResults();
             return;
         }
@@ -714,8 +828,26 @@
         const saved = localStorage.getItem('misfit_pseudo') || '';
         const input = document.getElementById('pseudo-input');
         input.value = saved;
-        document.getElementById('pseudo-btn').disabled  = saved.trim().length < 2;
+        document.getElementById('pseudo-btn').disabled      = saved.trim().length < 2;
         document.getElementById('pseudo-error').textContent = '';
+
+        // Charger le streak depuis Firestore en background (non-bloquant)
+        const motivEl = document.getElementById('streak-motivation');
+        motivEl.classList.remove('visible');
+        motivEl.textContent = '';
+        if (saved.trim().length >= 2) {
+            loadStreak(saved).then(sd => {
+                const streak  = sd.streak || 0;
+                const lastDay = sd.lastPlayedDay || '';
+                if (streak >= 1 && lastDay === getYesterdayKey()) {
+                    motivEl.textContent = streak >= 2
+                        ? `🔥 ${streak}-day streak — keep it going!`
+                        : `🔥 Day 1 yesterday — build your streak today!`;
+                    motivEl.classList.add('visible');
+                }
+            }).catch(() => {});
+        }
+
         showScreen('pseudo-screen');
         if (!saved) input.focus();
     });
@@ -765,6 +897,8 @@
             localStorage.setItem('misfit_correct', String(correctAnswers));
             localStorage.setItem('misfit_results', JSON.stringify(questionResults));
             localStorage.setItem('misfit_total',   String(puzzles.length));
+            // Idempotent : si déjà compté aujourd'hui ne fait rien, sinon incrémente
+            await updateStreak(playerPseudo);
             showResults();
             return;
         }
@@ -920,7 +1054,7 @@
 
     // ─── Finish ───────────────────────────────────────────────────────────────
 
-    function finishGame() {
+    async function finishGame() {
         const todayKey = getTodayKey();
         localStorage.setItem('misfit_day',     todayKey);
         localStorage.setItem('misfit_score',   String(totalScore));
@@ -928,9 +1062,11 @@
         localStorage.setItem('misfit_results', JSON.stringify(questionResults));
         localStorage.setItem('misfit_total',   String(puzzles.length));
 
-        // ── Sauvegarder dans Firestore pour bloquer la navigation privée ───
+        // ── Sauvegarder dans Firestore (anti-replay) ───────────────────────
         getDeviceId().then(deviceId => savePlayRecord(deviceId, todayKey));
 
+        // ── Mettre à jour le streak dans Firestore ─────────────────────────
+        await updateStreak(playerPseudo);
         showResults();
     }
 
@@ -960,20 +1096,20 @@
         perfEl.className  = `perf-label ${perfClass}`;
         perfEl.textContent = perfText;
 
-        // Meilleur score historique
-        const prevBest = Number(localStorage.getItem('misfit_best_score')) || 0;
-        const noteEl   = document.getElementById('best-score-note');
-        if (totalScore > prevBest) {
-            localStorage.setItem('misfit_best_score', String(totalScore));
-            noteEl.innerHTML = prevBest > 0
-                ? `🏅 New personal best! (was <span>${prevBest}</span> pts)`
-                : `🏅 First game — this is your score to beat!`;
-        } else if (prevBest > 0) {
-            noteEl.innerHTML = `Best score: <span>${prevBest}</span> pts`;
-        }
 
         showScreen('result-screen');
         animateScore(totalScore);
+
+        // Streak quotidien (chargé depuis Firestore via updateStreak / loadStreak)
+        const streakEl = document.getElementById('streak-result');
+        if (dailyStreak > 0) {
+            streakEl.textContent = getStreakLabel(dailyStreak);
+            streakEl.classList.add('visible');
+        } else {
+            streakEl.classList.remove('visible');
+            streakEl.textContent = '';
+        }
+
         loadLeaderboard();
     }
 
@@ -1019,8 +1155,8 @@
     // DEV HELPER : ouvrir index.html?reset vide tout le cache MISFIT
     if (new URLSearchParams(location.search).has('reset')) {
         const keys = ['misfit_pseudo','misfit_did','misfit_ip','misfit_device_id',
-                      'misfit_day','misfit_score','misfit_correct',
-                      'misfit_results','misfit_total','misfit_best_score'];
+                      'misfit_day','misfit_score','misfit_correct','misfit_results',
+                      'misfit_total','misfit_best_score','misfit_streak','misfit_streak_day'];
         keys.forEach(k => { localStorage.removeItem(k); sessionStorage.removeItem(k); });
         console.info('🧹 MISFIT cache cleared — reloading…');
         location.replace(location.pathname); // retire ?reset de l'URL
