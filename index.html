@@ -220,6 +220,12 @@
         .perf-ok      { background: #e3f2fd; color: var(--li-blue); border: 1px solid #90caf9; }
         .perf-bad     { background: #fce8e6; color: var(--error-red); border: 1px solid #ef9a9a; }
 
+        /* --- STATS LINE --- */
+        .stats-line {
+            font-size: 0.69rem; color: var(--li-subtext); letter-spacing: 0.3px;
+            margin-top: 10px; min-height: 18px; /* réserve l'espace pour éviter le saut */
+        }
+
         /* --- ERROR BANNER --- */
         .error-banner {
             background: #fce8e6; border: 1px solid var(--error-red);
@@ -273,9 +279,7 @@
         .lb-encourage strong { color: var(--li-blue); }
 
         /* --- DAILY STREAK --- */
-        .streak-result {
-            display: none; /* caché par défaut — .visible l'affiche */
-        }
+        .streak-result { display: none; }
         .streak-result.visible {
             display: inline-flex; align-items: center; gap: 7px;
             background: linear-gradient(135deg, #fff3e0, #ffe0b2);
@@ -307,6 +311,7 @@
             ⚠️ Could not load today's puzzle. Check your connection and refresh.
         </div>
         <button id="start-btn" class="btn-play is-loading" disabled>Loading</button>
+        <p id="stats-line" class="stats-line"></p>
         <div class="how-to-footer">
             <p class="how-to-title">How to play</p>
             <div class="steps-list">
@@ -497,12 +502,12 @@
         let   streak       = data.streak || 0;
 
         if (lastDay === todayKey) {
-            dailyStreak = streak; // déjà compté aujourd'hui, rien à faire
+            dailyStreak = streak;
             return streak;
         } else if (lastDay === yesterdayKey) {
-            streak += 1; // continuité ✅
+            streak += 1;
         } else {
-            streak = 1;  // interruption ou première partie
+            streak = 1;
         }
 
         dailyStreak = streak;
@@ -529,6 +534,7 @@
         if (streak === 1)  return `🔥 Day 1 — come back tomorrow!`;
         return `🔥 ${streak} day streak!`;
     }
+
 
     /**
      * ID du document Firestore = numéro du jour du mois (1→31).
@@ -785,10 +791,22 @@
         }
 
         try {
+            // Lancer la requête du compteur en parallèle dès le début (non-bloquant)
+            const countPromise = getDocs(query(collection(db, 'scores'), where('date', '==', todayKey)))
+                .then(snaps => {
+                    const n  = snaps.size;
+                    const el = document.getElementById('stats-line');
+                    if (el && n > 0) {
+                        const fmt = n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+                        el.textContent = `👥 ${fmt} ${n === 1 ? 'player' : 'players'} played today`;
+                    }
+                }).catch(() => {});
+
             // Charger le puzzle + pré-chauffer l'IP en parallèle
             const [snap] = await Promise.all([
                 getDocFast(doc(db, "daily_puzzles", getTodayPuzzleId())),
                 getPublicIp(),
+                countPromise,
             ]);
 
             if (!snap.exists()) {
@@ -801,6 +819,7 @@
 
             btn.textContent = "Play Now ▶";
             btn.disabled    = false;
+
 
         } catch (err) {
             console.error("Firebase error:", err);
@@ -1100,7 +1119,7 @@
         showScreen('result-screen');
         animateScore(totalScore);
 
-        // Streak quotidien (chargé depuis Firestore via updateStreak / loadStreak)
+        // Streak quotidien
         const streakEl = document.getElementById('streak-result');
         if (dailyStreak > 0) {
             streakEl.textContent = getStreakLabel(dailyStreak);
