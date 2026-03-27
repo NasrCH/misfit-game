@@ -279,772 +279,702 @@
 </div>
 
 <script type="module">
-  import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
-  import {
-    getFirestore, getDocsFromServer, doc, getDoc,
-    collection, query, where, getDocs,
-    orderBy, limit
-  } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
+    const WORKER_URL = 'https://misfit-api.misfit-game.workers.dev';
 
-  const CFG = {
-    apiKey:            'AIzaSyBEG9mOSns3-Gw1vAEnZILaIRKrVnweHdo',
-    authDomain:        'misfit-game.firebaseapp.com',
-    projectId:         'misfit-game',
-    storageBucket:     'misfit-game.firebasestorage.app',
-    messagingSenderId: '394080113498',
-    appId:             '1:394080113498:web:18e40d37027d00f67ed963'
-  };
-
-  const PASS = 'misfit2026';
-  const app  = initializeApp(CFG);
-  const db   = getFirestore(app);
-
-  // ── Tiny helpers ──────────────────────────────────────────────────────────
-  const $   = id => document.getElementById(id);
-  const txt = (id, v) => { const e = $(id); if (e) e.textContent = v; };
-  const esc = s => String(s)
-    .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
-
-  function dateKey(offset) {
-    offset = offset || 0;
-    const d = new Date();
-    d.setDate(d.getDate() - offset);
-    const y  = d.getFullYear();
-    const m  = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return y + '-' + m + '-' + dd;
-  }
-
-  function last7days() {
-    return [6,5,4,3,2,1,0].map(i => dateKey(i));
-  }
-
-  function fmtTime(iso) {
-    if (!iso) return '\u2014';
-    try {
-      return new Date(iso).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
-    } catch (e) { return '\u2014'; }
-  }
-
-  function deltaTxt(cur, prev, suffix) {
-    suffix = suffix || '';
-    if (!prev || prev === 0) return '';
-    const d   = cur - prev;
-    const pct = Math.round(d / prev * 100);
-    const s   = pct >= 0 ? ('+' + pct) : String(pct);
-    if (d > 0) return '\u25b2 +' + d + suffix + ' vs yesterday (' + s + '%)';
-    if (d < 0) return '\u25bc ' + d + suffix + ' vs yesterday (' + s + '%)';
-    return '\u2192 Same as yesterday';
-  }
-
-  // ── Auth ──────────────────────────────────────────────────────────────────
-  if (localStorage.getItem('misfit_adm') === PASS) boot();
-
-  $('pwd-btn').addEventListener('click', tryAuth);
-  $('pwd').addEventListener('keydown', function(e) { if (e.key === 'Enter') tryAuth(); });
-
-  function tryAuth() {
-    if ($('pwd').value === PASS) {
-      localStorage.setItem('misfit_adm', PASS);
-      boot();
-    } else {
-      $('pwd-err').textContent = 'Incorrect password';
-      $('pwd').value = '';
-      $('pwd').focus();
+    // adminGet : requête Worker avec le token admin dans Authorization header
+    async function adminGet(path) {
+      const token = localStorage.getItem('misfit_adm') || '';
+      const res = await fetch(WORKER_URL + path, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if (res.status === 401) {
+        localStorage.removeItem('misfit_adm');
+        location.reload();
+        throw new Error('Unauthorized');
+      }
+      if (!res.ok) throw new Error('GET ' + path + ' \u2192 ' + res.status);
+      return res.json();
     }
-  }
 
-  $('btn-logout').addEventListener('click', function() {
-    localStorage.removeItem('misfit_adm');
-    location.reload();
-  });
+    // play_records du jour, partagé entre loadAll() et loadGeoData()
+    var cachedPlayRecordsToday = [];
 
-  $('btn-refresh').addEventListener('click', loadAll);
 
-  // ── Boot ──────────────────────────────────────────────────────────────────
-  function boot() {
-    $('auth-gate').style.display = 'none';
-    $('app').style.display = 'block';
-    txt('hd-date', dateKey(0));
-    loadAll();
-    setInterval(loadAll, 5 * 60 * 1000);
-  }
+    // ── Tiny helpers ──────────────────────────────────────────────────────────
+    const $   = id => document.getElementById(id);
+    const txt = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+    const esc = s => String(s)
+      .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
 
-  // ── Charts ────────────────────────────────────────────────────────────────
-  var charts = {};
+    function dateKey(offset) {
+      offset = offset || 0;
+      const d = new Date();
+      d.setDate(d.getDate() - offset);
+      const y  = d.getFullYear();
+      const m  = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + dd;
+    }
 
-  function upsertChart(id, type, labels, data, color, extraOpts) {
-    extraOpts = extraOpts || {};
-    var ctx = $(id).getContext('2d');
+    function last7days() {
+      return [6,5,4,3,2,1,0].map(i => dateKey(i));
+    }
 
-    var ds = {
-      data: data,
-      borderColor: color,
-      backgroundColor: type === 'bar' ? color + 'bb' : color + '18',
-      borderWidth: type === 'bar' ? 1.5 : 2.5,
-      borderRadius: type === 'bar' ? 6 : 0,
-      fill: type !== 'bar',
-      tension: 0.35,
-      pointRadius: 4,
-      pointBackgroundColor: color
+    function fmtTime(iso) {
+      if (!iso) return '\u2014';
+      try {
+        return new Date(iso).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+      } catch (e) { return '\u2014'; }
+    }
+
+    function deltaTxt(cur, prev, suffix) {
+      suffix = suffix || '';
+      if (!prev || prev === 0) return '';
+      const d   = cur - prev;
+      const pct = Math.round(d / prev * 100);
+      const s   = pct >= 0 ? ('+' + pct) : String(pct);
+      if (d > 0) return '\u25b2 +' + d + suffix + ' vs yesterday (' + s + '%)';
+      if (d < 0) return '\u25bc ' + d + suffix + ' vs yesterday (' + s + '%)';
+      return '\u2192 Same as yesterday';
+    }
+
+    // ── Auth ──────────────────────────────────────────────────────────────────
+    if (localStorage.getItem('misfit_adm')) boot();
+
+    $('pwd-btn').addEventListener('click', tryAuth);
+    $('pwd').addEventListener('keydown', function(e) { if (e.key === 'Enter') tryAuth(); });
+
+    async function tryAuth() {
+      const val = $('pwd').value;
+      if (!val) return;
+      $('pwd-btn').disabled    = true;
+      $('pwd-btn').textContent = 'Checking\u2026';
+      try {
+        const res = await fetch(WORKER_URL + '/api/admin/ping', {
+          headers: { 'Authorization': 'Bearer ' + val }
+        });
+        if (res.ok) {
+          localStorage.setItem('misfit_adm', val);
+          $('auth-gate').style.display = 'none';
+          boot();
+        } else {
+          $('pwd-err').textContent = 'Incorrect password';
+          $('pwd').value = '';
+          $('pwd').focus();
+        }
+      } catch (e) {
+        $('pwd-err').textContent = 'Connection error — check Worker';
+      } finally {
+        $('pwd-btn').disabled    = false;
+        $('pwd-btn').textContent = 'Enter Dashboard';
+      }
+    }
+
+    $('btn-logout').addEventListener('click', function() {
+      localStorage.removeItem('misfit_adm');
+      location.reload();
+    });
+
+    $('btn-refresh').addEventListener('click', loadAll);
+
+    // ── Boot ──────────────────────────────────────────────────────────────────
+    function boot() {
+      $('auth-gate').style.display = 'none';
+      $('app').style.display = 'block';
+      txt('hd-date', dateKey(0));
+      loadAll();
+      setInterval(loadAll, 5 * 60 * 1000);
+    }
+
+    // ── Charts ────────────────────────────────────────────────────────────────
+    var charts = {};
+
+    function upsertChart(id, type, labels, data, color, extraOpts) {
+      extraOpts = extraOpts || {};
+      var ctx = $(id).getContext('2d');
+
+      var ds = {
+        data: data,
+        borderColor: color,
+        backgroundColor: type === 'bar' ? color + 'bb' : color + '18',
+        borderWidth: type === 'bar' ? 1.5 : 2.5,
+        borderRadius: type === 'bar' ? 6 : 0,
+        fill: type !== 'bar',
+        tension: 0.35,
+        pointRadius: 4,
+        pointBackgroundColor: color
+      };
+
+      if (charts[id]) {
+        charts[id].data.labels          = labels;
+        charts[id].data.datasets[0].data = data;
+        charts[id].update('none');
+        return;
+      }
+
+      var yTicks = extraOpts.yTicks || {};
+      var yMax   = extraOpts.yMax;
+
+      charts[id] = new Chart(ctx, {
+        type: type,
+        data: { labels: labels, datasets: [ds] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1a1a1a',
+              padding: 10,
+              cornerRadius: 8,
+              titleFont: { size: 11 },
+              bodyFont:  { size: 11 }
+            }
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { font: { size: 10 }, color: 'rgba(0,0,0,.45)' }
+            },
+            y: {
+              beginAtZero: true,
+              max: yMax,
+              grid: { color: 'rgba(0,0,0,.04)' },
+              ticks: Object.assign({ font: { size: 10 }, color: 'rgba(0,0,0,.45)' }, yTicks)
+            }
+          }
+        }
+      });
+    }
+
+    // ── Load all data ─────────────────────────────────────────────────────────
+    async function loadAll() {
+      $('spinner').style.display = 'flex';
+      try {
+        var today = dateKey(0);
+        var yest  = dateKey(1);
+        var days  = last7days();
+        // ── 1 seule requête Worker remplace 13+ appels Firebase ───────────────────
+        var dashData = await adminGet('/api/admin/dashboard?days=7');
+
+        // Scores → byDay
+        var byDay = {};
+        days.forEach(function(d) { byDay[d] = []; });
+        (dashData.scores || []).forEach(function(dd) {
+          if (byDay[dd.date]) byDay[dd.date].push(dd);
+        });
+
+        // play_records today → DAU + partagé avec loadGeoData()
+        cachedPlayRecordsToday = dashData.playRecordsToday || [];
+        var uniquePseudosPR = {};
+        cachedPlayRecordsToday.forEach(function(d) {
+          var ps = (d.pseudo || '').trim().toLowerCase();
+          if (ps) uniquePseudosPR[ps] = true;
+        });
+        var dauFromPR = Object.keys(uniquePseudosPR).length;
+
+        // Daily stats → déjà groupés par date par le Worker
+        var sByDay = dashData.stats || {};
+        days.forEach(function(d) {
+          if (!sByDay[d]) sByDay[d] = { opens:0, starts:0, completions:0, shares:0 };
+        });
+
+        // Streaks (ajouter _id = pseudo pour compatibilité avec renderStreaks)
+        var topStreaks = (dashData.streaks || []).map(function(e) {
+          return Object.assign({ _id: e.pseudo || '' }, e);
+        });
+
+
+        // ── KPI calculations ────────────────────────────────────────────────
+        var todayArr  = byDay[today] || [];
+        var yestArr   = byDay[yest]  || [];
+        var ts        = sByDay[today] || {};
+        var ys        = sByDay[yest]  || {};
+
+        var dauFromScores = todayArr.length;
+        var dauY          = yestArr.length;
+        var dau = Math.max(dauFromScores, dauFromPR);
+
+        // ── Merge play_records players missing from scores ─────────────────
+        // (race condition: play_records saved ~2s before scores in savePlayRecord)
+        var inScores = {};
+        todayArr.forEach(function(e) {
+          inScores[(e.pseudo || '').trim().toLowerCase()] = true;
+        });
+        var alreadyAdded = {};
+        var allTodayPlayers = todayArr.slice();
+        cachedPlayRecordsToday.forEach(function(d) {
+          var ps = (d.pseudo || '').trim().toLowerCase();
+          if (ps && !inScores[ps] && !alreadyAdded[ps]) {
+            alreadyAdded[ps] = true;
+            allTodayPlayers.push({
+              pseudo:  d.pseudo  || '?',
+              score:   d.score   || 0,
+              correct: d.correct || 0,
+              total:   d.total   || 0,
+              ts:      d.ts      || ''
+            });
+          }
+        });
+
+        var opens     = ts.opens        || 0;
+        var starts    = ts.starts       || 0;
+        var compl     = ts.completions  || 0;
+        var shares    = ts.shares       || 0;
+        var startsY   = ys.starts       || 0;
+        var complY    = ys.completions  || 0;
+        var sharesY   = ys.shares       || 0;
+
+        var hasTracking = starts > 0;
+
+        var cr  = starts > 0 ? Math.round(compl  / starts  * 100) : null;
+        var crY = startsY > 0 ? Math.round(complY / startsY * 100) : null;
+
+        var avgScore = dau > 0
+          ? Math.round(allTodayPlayers.reduce(function(s, e) { return s + e.score; }, 0) / dau)
+          : 0;
+        var avgScoreY = dauY > 0
+          ? Math.round(yestArr.reduce(function(s, e) { return s + e.score; }, 0) / dauY)
+          : 0;
+
+        var bestEntry = allTodayPlayers.length > 0
+          ? allTodayPlayers.reduce(function(a, b) { return a.score > b.score ? a : b; })
+          : null;
+
+        var topStr = topStreaks[0] || null;
+
+        // Show tracking notice if needed
+        $('tracking-banner').style.display = hasTracking ? 'none' : 'flex';
+
+        // ── Set KPI values ──────────────────────────────────────────────────
+        txt('k-dau', dau);
+        $('k-dau-d').textContent = deltaTxt(dau, dauY);
+        $('k-dau-d').className   = 'kpi-d ' + (dau >= dauY ? 'up' : 'down');
+        // Show a subtle note when play_records > scores (race condition in savePlayRecord)
+        var pendingScores = dauFromPR - dauFromScores;
+        txt('k-dau-sub', pendingScores > 0
+          ? 'Players today \u26a0\ufe0f ' + pendingScores + ' score(s) en attente'
+          : 'Players today');
+
+        if (cr !== null) {
+          txt('k-cr', cr + '%');
+          $('k-cr-d').textContent = deltaTxt(cr, crY, '%');
+          $('k-cr-d').className   = 'kpi-d ' + (cr >= (crY || 0) ? 'up' : 'down');
+        } else {
+          txt('k-cr', '\u2014');
+          $('k-cr-d').textContent = 'Tracking not yet enabled';
+          $('k-cr-d').className   = 'kpi-d neu';
+        }
+
+        if (hasTracking) {
+          txt('k-kf', shares);
+          $('k-kf-d').textContent = deltaTxt(shares, sharesY);
+          $('k-kf-d').className   = 'kpi-d ' + (shares >= sharesY ? 'up' : 'down');
+        } else {
+          txt('k-kf', '\u2014');
+          $('k-kf-d').textContent = 'Tracking not yet enabled';
+          $('k-kf-d').className   = 'kpi-d neu';
+        }
+
+        txt('k-avg', avgScore ? (avgScore + ' pts') : '\u2014');
+        $('k-avg-d').textContent = deltaTxt(avgScore, avgScoreY, ' pts');
+        $('k-avg-d').className   = 'kpi-d ' + (avgScore >= avgScoreY ? 'up' : 'down');
+
+        txt('k-best',      bestEntry ? (bestEntry.score + ' pts') : '\u2014');
+        txt('k-best-name', bestEntry ? ('\ud83e\udd47 ' + bestEntry.pseudo) : '\u2014');
+        txt('k-streak',    topStr ? (topStr.streak + ' days') : '\u2014');
+        txt('k-streak-name', topStr ? ('\ud83d\udd25 ' + (topStr.pseudo || topStr._id)) : '\u2014');
+
+        // ── Funnel ──────────────────────────────────────────────────────────
+        renderFunnel(opens, starts, dau, shares, !hasTracking);
+
+        // ── Charts ──────────────────────────────────────────────────────────
+        var labels   = days.map(function(d) { return d.slice(5); });
+
+        var dauData  = days.map(function(d) {
+          // For today: use play_records count (more reliable, saves first)
+          // For past days: scores is complete (race condition long resolved)
+          return d === today ? Math.max(byDay[d].length, dauFromPR) : byDay[d].length;
+        });
+        var avgData  = days.map(function(d) {
+          var arr = byDay[d];
+          if (!arr.length) return 0;
+          return Math.round(arr.reduce(function(s, e) { return s + e.score; }, 0) / arr.length);
+        });
+        var crData   = days.map(function(d) {
+          var s = sByDay[d] || {};
+          return s.starts > 0 ? Math.round((s.completions || 0) / s.starts * 100) : 0;
+        });
+        var shareData = days.map(function(d) { return (sByDay[d] || {}).shares || 0; });
+
+        upsertChart('c-dau',    'line', labels, dauData,   '#0a66c2');
+        upsertChart('c-avg',    'line', labels, avgData,   '#9c27b0');
+        upsertChart('c-cr',     'line', labels, crData,    '#057647',
+          { yMax: 100, yTicks: { callback: function(v) { return v + '%'; } } });
+        upsertChart('c-shares', 'bar',  labels, shareData, '#f5a623');
+
+        // ── Tables ──────────────────────────────────────────────────────────
+        renderPlayers(allTodayPlayers);
+        renderStreaks(topStreaks);
+
+        txt('last-rf', 'Refreshed at ' + new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }));
+
+        // Geo card — non-blocking, runs in background
+        loadGeoData();
+
+      } catch (err) {
+        console.error('Admin load error:', err);
+        if (err.message !== 'Unauthorized') {
+          alert('Error loading data: ' + err.message);
+        }
+      } finally {
+        $('spinner').style.display = 'none';
+      }
+    }
+
+    // ── Render funnel ─────────────────────────────────────────────────────────
+    function renderFunnel(opens, starts, completions, shares, noTracking) {
+      var steps = [
+        { icon: '\ud83d\udc40', label: 'Opens',       val: opens,       base: null        },
+        { icon: '\u25b6\ufe0f',  label: 'Starts',      val: starts,      base: opens       },
+        { icon: '\ud83c\udfc1', label: 'Completions', val: completions, base: starts      },
+        { icon: '\ud83d\ude80', label: 'Shares',      val: shares,      base: completions }
+      ];
+
+      var html = '';
+      steps.forEach(function(s, i) {
+        var rate = (s.base && s.base > 0) ? Math.round(s.val / s.base * 100) : null;
+        if (i > 0) html += '<div class="f-arrow">\u2192</div>';
+        html += '<div class="f-step">';
+        html += '<div class="f-icon">' + s.icon + '</div>';
+        html += '<div class="f-val">' + s.val + '</div>';
+        html += '<div class="f-lbl">' + s.label + '</div>';
+        if (rate !== null) html += '<div class="f-rate">' + rate + '% from prev</div>';
+        html += '</div>';
+      });
+
+      $('funnel-row').innerHTML = html;
+      $('funnel-note').textContent = noTracking
+        ? '\u26a0\ufe0f Opens / Starts / Shares not tracked yet. Add logDailyEvent() to index.html to unlock the full funnel.'
+        : '';
+    }
+
+    // ── Render players table ──────────────────────────────────────────────────
+    function renderPlayers(scores) {
+      var tbody = $('t-players');
+      if (!scores || !scores.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--sub)">No players today yet</td></tr>';
+        return;
+      }
+      var sorted = scores.slice().sort(function(a, b) { return b.score - a.score; });
+      var medals = ['\ud83e\udd47', '\ud83e\udd48', '\ud83e\udd49'];
+      var html   = '';
+      sorted.forEach(function(e, i) {
+        var acc   = e.total > 0 ? Math.round(e.correct / e.total * 100) : 0;
+        var badge = acc === 100
+          ? '<span class="bdg bdg-o">Perfect</span>'
+          : (acc >= 60
+            ? '<span class="bdg bdg-g">Good</span>'
+            : '<span class="bdg bdg-r">Needs work</span>');
+        var rank = i < 3 ? medals[i] : ('#' + (i + 1));
+        html += '<tr>';
+        html += '<td style="font-weight:800">' + rank + '</td>';
+        html += '<td style="font-weight:700">' + esc(e.pseudo || '?') + '</td>';
+        html += '<td style="font-weight:800;color:var(--blue)">' + e.score + ' pts</td>';
+        html += '<td>' + e.correct + '/' + e.total + '</td>';
+        html += '<td>' + badge + ' ' + acc + '%</td>';
+        html += '<td style="font-size:.73rem;color:var(--sub)">' + fmtTime(e.ts) + '</td>';
+        html += '</tr>';
+      });
+      tbody.innerHTML = html;
+    }
+
+    // ── Geo / Map ─────────────────────────────────────────────────────────────
+    var geoCache     = {};
+    var leafletMap   = null;
+    var markersLayer = null;
+
+    // Convert 2-letter ISO code → flag emoji  (e.g. "FR" → 🇫🇷)
+    function flag(code) {
+      if (!code || code.length !== 2) return '\uD83C\uDF10';
+      var A = 0x1F1E6;
+      return String.fromCodePoint(A + code.toUpperCase().codePointAt(0) - 65) +
+             String.fromCodePoint(A + code.toUpperCase().codePointAt(1) - 65);
+    }
+
+    // Country code → full name
+    var COUNTRY_NAMES = {
+      'AF':'Afghanistan','AL':'Albania','DZ':'Algeria','AR':'Argentina','AM':'Armenia',
+      'AU':'Australia','AT':'Austria','AZ':'Azerbaijan','BH':'Bahrain','BE':'Belgium',
+      'BR':'Brazil','CA':'Canada','CL':'Chile','CN':'China','CO':'Colombia','HR':'Croatia',
+      'CZ':'Czech Republic','DK':'Denmark','EG':'Egypt','EE':'Estonia','FI':'Finland',
+      'FR':'France','GE':'Georgia','DE':'Germany','GH':'Ghana','GR':'Greece','HU':'Hungary',
+      'IN':'India','ID':'Indonesia','IQ':'Iraq','IE':'Ireland','IL':'Israel','IT':'Italy',
+      'JP':'Japan','JO':'Jordan','KZ':'Kazakhstan','KE':'Kenya','KW':'Kuwait','LV':'Latvia',
+      'LB':'Lebanon','LT':'Lithuania','LU':'Luxembourg','MY':'Malaysia','MA':'Morocco',
+      'MX':'Mexico','NL':'Netherlands','NZ':'New Zealand','NG':'Nigeria','NO':'Norway',
+      'OM':'Oman','PK':'Pakistan','PL':'Poland','PT':'Portugal','QA':'Qatar','RO':'Romania',
+      'RU':'Russia','SA':'Saudi Arabia','SN':'Senegal','SG':'Singapore','ZA':'South Africa',
+      'KR':'South Korea','ES':'Spain','SE':'Sweden','CH':'Switzerland','TW':'Taiwan',
+      'TH':'Thailand','TN':'Tunisia','TR':'Turkey','AE':'UAE','GB':'United Kingdom',
+      'US':'United States','UA':'Ukraine','UY':'Uruguay','VN':'Vietnam'
     };
 
-    if (charts[id]) {
-      charts[id].data.labels          = labels;
-      charts[id].data.datasets[0].data = data;
-      charts[id].update('none');
-      return;
+    // Try one IP against a single API endpoint, return normalized object or null
+    async function tryGeoAPI(ip, apiFn) {
+      try { return await apiFn(ip); }
+      catch (e) { return null; }
     }
 
-    var yTicks = extraOpts.yTicks || {};
-    var yMax   = extraOpts.yMax;
-
-    charts[id] = new Chart(ctx, {
-      type: type,
-      data: { labels: labels, datasets: [ds] },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#1a1a1a',
-            padding: 10,
-            cornerRadius: 8,
-            titleFont: { size: 11 },
-            bodyFont:  { size: 11 }
-          }
-        },
-        scales: {
-          x: {
-            grid: { display: false },
-            ticks: { font: { size: 10 }, color: 'rgba(0,0,0,.45)' }
-          },
-          y: {
-            beginAtZero: true,
-            max: yMax,
-            grid: { color: 'rgba(0,0,0,.04)' },
-            ticks: Object.assign({ font: { size: 10 }, color: 'rgba(0,0,0,.45)' }, yTicks)
-          }
-        }
-      }
-    });
-  }
-
-  // ── Load all data ─────────────────────────────────────────────────────────
-  async function loadAll() {
-    $('spinner').style.display = 'flex';
-    try {
-      var today = dateKey(0);
-      var yest  = dateKey(1);
-      var days  = last7days();
-
-      // 1. Scores — last 7 days (forced server fetch = toujours frais, no stale cache)
-      var scoresSnap = await getDocsFromServer(
-        query(collection(db, 'scores'), where('date', 'in', days))
-      );
-      var byDay = {};
-      days.forEach(function(d) { byDay[d] = []; });
-      scoresSnap.docs.forEach(function(sd) {
-        var dd = sd.data();
-        if (byDay[dd.date]) byDay[dd.date].push(dd);
-      });
-
-      // 1b. play_records today → source de vérité pour le DAU
-      //     getDocsFromServer : bypass cache — même si scores est en retard, play_records est frais
-      var todayISOStart = dateKey(0) + 'T00:00:00.000Z';
-      var prTodaySnap = await getDocsFromServer(
-        query(collection(db, 'play_records'), where('ts', '>=', todayISOStart))
-      );
-      var uniquePseudosPR = {};
-      prTodaySnap.docs.forEach(function(d) {
-        var ps = (d.data().pseudo || '').trim().toLowerCase();
-        if (ps) uniquePseudosPR[ps] = true;
-      });
-      var dauFromPR = Object.keys(uniquePseudosPR).length;
-
-      // 2. Daily stats (funnel, optional)
-      var statsArr = await Promise.all(
-        days.map(function(d) { return getDoc(doc(db, 'daily_stats', d)); })
-      );
-      var sByDay = {};
-      statsArr.forEach(function(snap, i) {
-        sByDay[days[i]] = snap.exists()
-          ? snap.data()
-          : { opens:0, starts:0, completions:0, shares:0 };
-      });
-
-      // 3. Top streaks (ordered by streak desc)
-      var topStreaks = [];
-      try {
-        var streaksSnap = await getDocs(
-          query(collection(db, 'streaks'), orderBy('streak', 'desc'), limit(10))
-        );
-        topStreaks = streaksSnap.docs.map(function(d) {
-          return Object.assign({ _id: d.id }, d.data());
+    // ipinfo.io: free 50k/month, HTTPS, CORS enabled
+    function geoViaIpinfo(ip) {
+      return fetch('https://ipinfo.io/' + ip + '/json')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d || d.bogon || !d.loc) return null;
+          var parts = d.loc.split(',');
+          var code  = d.country || '';
+          return {
+            latitude:     parseFloat(parts[0]),
+            longitude:    parseFloat(parts[1]),
+            city:         d.city   || '',
+            country_code: code,
+            country_name: COUNTRY_NAMES[code] || code
+          };
         });
-      } catch (e) {
-        // Index might not exist yet — fallback: fetch all and sort in JS
-        try {
-          var sAll = await getDocs(collection(db, 'streaks'));
-          topStreaks = sAll.docs
-            .map(function(d) { return Object.assign({ _id: d.id }, d.data()); })
-            .sort(function(a, b) { return (b.streak || 0) - (a.streak || 0); })
-            .slice(0, 10);
-        } catch (e2) { topStreaks = []; }
-      }
+    }
 
-      // ── KPI calculations ────────────────────────────────────────────────
-      var todayArr  = byDay[today] || [];
-      var yestArr   = byDay[yest]  || [];
-      var ts        = sByDay[today] || {};
-      var ys        = sByDay[yest]  || {};
+    // freeipapi.com: free HTTPS, returns full country name directly
+    function geoViaFreeipapi(ip) {
+      return fetch('https://freeipapi.com/api/json/' + ip)
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d || !d.latitude || d.latitude === -90) return null;
+          return {
+            latitude:     d.latitude,
+            longitude:    d.longitude,
+            city:         d.cityName    || '',
+            country_code: d.countryCode || '',
+            country_name: d.countryName || d.countryCode || ''
+          };
+        });
+    }
 
-      var dauFromScores = todayArr.length;
-      var dauY          = yestArr.length;
-      var dau = Math.max(dauFromScores, dauFromPR);
+    async function geolocateSingle(ip) {
+      var result = await tryGeoAPI(ip, geoViaIpinfo);
+      if (result && result.latitude) return result;
+      result = await tryGeoAPI(ip, geoViaFreeipapi);
+      if (result && result.latitude) return result;
+      return null;
+    }
 
-      // ── Merge play_records players missing from scores ─────────────────
-      // (race condition: play_records saved ~2s before scores in savePlayRecord)
-      var inScores = {};
-      todayArr.forEach(function(e) {
-        inScores[(e.pseudo || '').trim().toLowerCase()] = true;
+    // Geolocate a list of unique IPs, caching results (retries previous failures)
+    async function geolocateIPs(ips) {
+      // Re-attempt previously failed IPs (null in cache)
+      var toFetch = ips.filter(function(ip) {
+        return ip && ip.trim() && (geoCache[ip] === null || !geoCache.hasOwnProperty(ip));
       });
-      var alreadyAdded = {};
-      var allTodayPlayers = todayArr.slice();
-      prTodaySnap.docs.forEach(function(d) {
-        var data = d.data();
-        var ps   = (data.pseudo || '').trim().toLowerCase();
-        if (ps && !inScores[ps] && !alreadyAdded[ps]) {
-          alreadyAdded[ps] = true;
-          allTodayPlayers.push({
-            pseudo:  data.pseudo  || '?',
-            score:   data.score   || 0,
-            correct: data.correct || 0,
-            total:   data.total   || 0,
-            ts:      data.ts      || ''
+
+      for (var i = 0; i < toFetch.length; i += 5) {
+        var batch = toFetch.slice(i, i + 5);
+        await Promise.all(batch.map(function(ip) {
+          return geolocateSingle(ip).then(function(result) {
+            geoCache[ip] = result;
           });
+        }));
+        if (i + 5 < toFetch.length) {
+          await new Promise(function(res) { setTimeout(res, 150); });
         }
-      });
-      var opens     = ts.opens        || 0;
-      var starts    = ts.starts       || 0;
-      var compl     = ts.completions  || 0;
-      var shares    = ts.shares       || 0;
-      var startsY   = ys.starts       || 0;
-      var complY    = ys.completions  || 0;
-      var sharesY   = ys.shares       || 0;
-
-      var hasTracking = starts > 0;
-
-      var cr  = starts > 0 ? Math.round(compl  / starts  * 100) : null;
-      var crY = startsY > 0 ? Math.round(complY / startsY * 100) : null;
-
-      var avgScore = dau > 0
-        ? Math.round(allTodayPlayers.reduce(function(s, e) { return s + e.score; }, 0) / dau)
-        : 0;
-      var avgScoreY = dauY > 0
-        ? Math.round(yestArr.reduce(function(s, e) { return s + e.score; }, 0) / dauY)
-        : 0;
-
-      var bestEntry = allTodayPlayers.length > 0
-        ? allTodayPlayers.reduce(function(a, b) { return a.score > b.score ? a : b; })
-        : null;
-
-      var topStr = topStreaks[0] || null;
-
-      // Show tracking notice if needed
-      $('tracking-banner').style.display = hasTracking ? 'none' : 'flex';
-
-      // ── Set KPI values ──────────────────────────────────────────────────
-      txt('k-dau', dau);
-      $('k-dau-d').textContent = deltaTxt(dau, dauY);
-      $('k-dau-d').className   = 'kpi-d ' + (dau >= dauY ? 'up' : 'down');
-      // Show a subtle note when play_records > scores (race condition in savePlayRecord)
-      var pendingScores = dauFromPR - dauFromScores;
-      txt('k-dau-sub', pendingScores > 0
-        ? 'Players today \u26a0\ufe0f ' + pendingScores + ' score(s) en attente'
-        : 'Players today');
-
-      if (cr !== null) {
-        txt('k-cr', cr + '%');
-        $('k-cr-d').textContent = deltaTxt(cr, crY, '%');
-        $('k-cr-d').className   = 'kpi-d ' + (cr >= (crY || 0) ? 'up' : 'down');
-      } else {
-        txt('k-cr', '\u2014');
-        $('k-cr-d').textContent = 'Tracking not yet enabled';
-        $('k-cr-d').className   = 'kpi-d neu';
       }
-
-      if (hasTracking) {
-        txt('k-kf', shares);
-        $('k-kf-d').textContent = deltaTxt(shares, sharesY);
-        $('k-kf-d').className   = 'kpi-d ' + (shares >= sharesY ? 'up' : 'down');
-      } else {
-        txt('k-kf', '\u2014');
-        $('k-kf-d').textContent = 'Tracking not yet enabled';
-        $('k-kf-d').className   = 'kpi-d neu';
-      }
-
-      txt('k-avg', avgScore ? (avgScore + ' pts') : '\u2014');
-      $('k-avg-d').textContent = deltaTxt(avgScore, avgScoreY, ' pts');
-      $('k-avg-d').className   = 'kpi-d ' + (avgScore >= avgScoreY ? 'up' : 'down');
-
-      txt('k-best',      bestEntry ? (bestEntry.score + ' pts') : '\u2014');
-      txt('k-best-name', bestEntry ? ('\ud83e\udd47 ' + bestEntry.pseudo) : '\u2014');
-      txt('k-streak',    topStr ? (topStr.streak + ' days') : '\u2014');
-      txt('k-streak-name', topStr ? ('\ud83d\udd25 ' + (topStr.pseudo || topStr._id)) : '\u2014');
-
-      // ── Funnel ──────────────────────────────────────────────────────────
-      renderFunnel(opens, starts, dau, shares, !hasTracking);
-
-      // ── Charts ──────────────────────────────────────────────────────────
-      var labels   = days.map(function(d) { return d.slice(5); });
-
-      var dauData  = days.map(function(d) {
-        // For today: use play_records count (more reliable, saves first)
-        // For past days: scores is complete (race condition long resolved)
-        return d === today ? Math.max(byDay[d].length, dauFromPR) : byDay[d].length;
-      });
-      var avgData  = days.map(function(d) {
-        var arr = byDay[d];
-        if (!arr.length) return 0;
-        return Math.round(arr.reduce(function(s, e) { return s + e.score; }, 0) / arr.length);
-      });
-      var crData   = days.map(function(d) {
-        var s = sByDay[d] || {};
-        return s.starts > 0 ? Math.round((s.completions || 0) / s.starts * 100) : 0;
-      });
-      var shareData = days.map(function(d) { return (sByDay[d] || {}).shares || 0; });
-
-      upsertChart('c-dau',    'line', labels, dauData,   '#0a66c2');
-      upsertChart('c-avg',    'line', labels, avgData,   '#9c27b0');
-      upsertChart('c-cr',     'line', labels, crData,    '#057647',
-        { yMax: 100, yTicks: { callback: function(v) { return v + '%'; } } });
-      upsertChart('c-shares', 'bar',  labels, shareData, '#f5a623');
-
-      // ── Tables ──────────────────────────────────────────────────────────
-      renderPlayers(allTodayPlayers);
-      renderStreaks(topStreaks);
-
-      txt('last-rf', 'Refreshed at ' + new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }));
-
-      // Geo card — non-blocking, runs in background
-      loadGeoData();
-
-    } catch (err) {
-      console.error('Admin load error:', err);
-      if (err.code === 'permission-denied' || err.message.includes('permissions')) {
-        showPermError();
-      } else {
-        alert('Error loading data: ' + err.message);
-      }
-    } finally {
-      $('spinner').style.display = 'none';
+      return geoCache;
     }
-  }
 
-  // ── Render funnel ─────────────────────────────────────────────────────────
-  function renderFunnel(opens, starts, completions, shares, noTracking) {
-    var steps = [
-      { icon: '\ud83d\udc40', label: 'Opens',       val: opens,       base: null        },
-      { icon: '\u25b6\ufe0f',  label: 'Starts',      val: starts,      base: opens       },
-      { icon: '\ud83c\udfc1', label: 'Completions', val: completions, base: starts      },
-      { icon: '\ud83d\ude80', label: 'Shares',      val: shares,      base: completions }
-    ];
+    // Load play_records for today, geolocate IPs, render map + country badges
+    async function loadGeoData() {
+      $('geo-loading').style.display = 'flex';
+      $('geo-content').style.display = 'none';
+      $('geo-empty').style.display   = 'none';
 
-    var html = '';
-    steps.forEach(function(s, i) {
-      var rate = (s.base && s.base > 0) ? Math.round(s.val / s.base * 100) : null;
-      if (i > 0) html += '<div class="f-arrow">\u2192</div>';
-      html += '<div class="f-step">';
-      html += '<div class="f-icon">' + s.icon + '</div>';
-      html += '<div class="f-val">' + s.val + '</div>';
-      html += '<div class="f-lbl">' + s.label + '</div>';
-      if (rate !== null) html += '<div class="f-rate">' + rate + '% from prev</div>';
-      html += '</div>';
-    });
-
-    $('funnel-row').innerHTML = html;
-    $('funnel-note').textContent = noTracking
-      ? '\u26a0\ufe0f Opens / Starts / Shares not tracked yet. Add logDailyEvent() to index.html to unlock the full funnel.'
-      : '';
-  }
-
-  // ── Render players table ──────────────────────────────────────────────────
-  function renderPlayers(scores) {
-    var tbody = $('t-players');
-    if (!scores || !scores.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--sub)">No players today yet</td></tr>';
-      return;
-    }
-    var sorted = scores.slice().sort(function(a, b) { return b.score - a.score; });
-    var medals = ['\ud83e\udd47', '\ud83e\udd48', '\ud83e\udd49'];
-    var html   = '';
-    sorted.forEach(function(e, i) {
-      var acc   = e.total > 0 ? Math.round(e.correct / e.total * 100) : 0;
-      var badge = acc === 100
-        ? '<span class="bdg bdg-o">Perfect</span>'
-        : (acc >= 60
-          ? '<span class="bdg bdg-g">Good</span>'
-          : '<span class="bdg bdg-r">Needs work</span>');
-      var rank = i < 3 ? medals[i] : ('#' + (i + 1));
-      html += '<tr>';
-      html += '<td style="font-weight:800">' + rank + '</td>';
-      html += '<td style="font-weight:700">' + esc(e.pseudo || '?') + '</td>';
-      html += '<td style="font-weight:800;color:var(--blue)">' + e.score + ' pts</td>';
-      html += '<td>' + e.correct + '/' + e.total + '</td>';
-      html += '<td>' + badge + ' ' + acc + '%</td>';
-      html += '<td style="font-size:.73rem;color:var(--sub)">' + fmtTime(e.ts) + '</td>';
-      html += '</tr>';
-    });
-    tbody.innerHTML = html;
-  }
-
-  // ── Geo / Map ─────────────────────────────────────────────────────────────
-  var geoCache     = {};
-  var leafletMap   = null;
-  var markersLayer = null;
-
-  // Convert 2-letter ISO code → flag emoji  (e.g. "FR" → 🇫🇷)
-  function flag(code) {
-    if (!code || code.length !== 2) return '\uD83C\uDF10';
-    var A = 0x1F1E6;
-    return String.fromCodePoint(A + code.toUpperCase().codePointAt(0) - 65) +
-           String.fromCodePoint(A + code.toUpperCase().codePointAt(1) - 65);
-  }
-
-  // Country code → full name
-  var COUNTRY_NAMES = {
-    'AF':'Afghanistan','AL':'Albania','DZ':'Algeria','AR':'Argentina','AM':'Armenia',
-    'AU':'Australia','AT':'Austria','AZ':'Azerbaijan','BH':'Bahrain','BE':'Belgium',
-    'BR':'Brazil','CA':'Canada','CL':'Chile','CN':'China','CO':'Colombia','HR':'Croatia',
-    'CZ':'Czech Republic','DK':'Denmark','EG':'Egypt','EE':'Estonia','FI':'Finland',
-    'FR':'France','GE':'Georgia','DE':'Germany','GH':'Ghana','GR':'Greece','HU':'Hungary',
-    'IN':'India','ID':'Indonesia','IQ':'Iraq','IE':'Ireland','IL':'Israel','IT':'Italy',
-    'JP':'Japan','JO':'Jordan','KZ':'Kazakhstan','KE':'Kenya','KW':'Kuwait','LV':'Latvia',
-    'LB':'Lebanon','LT':'Lithuania','LU':'Luxembourg','MY':'Malaysia','MA':'Morocco',
-    'MX':'Mexico','NL':'Netherlands','NZ':'New Zealand','NG':'Nigeria','NO':'Norway',
-    'OM':'Oman','PK':'Pakistan','PL':'Poland','PT':'Portugal','QA':'Qatar','RO':'Romania',
-    'RU':'Russia','SA':'Saudi Arabia','SN':'Senegal','SG':'Singapore','ZA':'South Africa',
-    'KR':'South Korea','ES':'Spain','SE':'Sweden','CH':'Switzerland','TW':'Taiwan',
-    'TH':'Thailand','TN':'Tunisia','TR':'Turkey','AE':'UAE','GB':'United Kingdom',
-    'US':'United States','UA':'Ukraine','UY':'Uruguay','VN':'Vietnam'
-  };
-
-  // Try one IP against a single API endpoint, return normalized object or null
-  async function tryGeoAPI(ip, apiFn) {
-    try { return await apiFn(ip); }
-    catch (e) { return null; }
-  }
-
-  // ipinfo.io: free 50k/month, HTTPS, CORS enabled
-  function geoViaIpinfo(ip) {
-    return fetch('https://ipinfo.io/' + ip + '/json')
-      .then(function(r) { return r.json(); })
-      .then(function(d) {
-        if (!d || d.bogon || !d.loc) return null;
-        var parts = d.loc.split(',');
-        var code  = d.country || '';
-        return {
-          latitude:     parseFloat(parts[0]),
-          longitude:    parseFloat(parts[1]),
-          city:         d.city   || '',
-          country_code: code,
-          country_name: COUNTRY_NAMES[code] || code
-        };
-      });
-  }
-
-  // freeipapi.com: free HTTPS, returns full country name directly
-  function geoViaFreeipapi(ip) {
-    return fetch('https://freeipapi.com/api/json/' + ip)
-      .then(function(r) { return r.json(); })
-      .then(function(d) {
-        if (!d || !d.latitude || d.latitude === -90) return null;
-        return {
-          latitude:     d.latitude,
-          longitude:    d.longitude,
-          city:         d.cityName    || '',
-          country_code: d.countryCode || '',
-          country_name: d.countryName || d.countryCode || ''
-        };
-      });
-  }
-
-  async function geolocateSingle(ip) {
-    var result = await tryGeoAPI(ip, geoViaIpinfo);
-    if (result && result.latitude) return result;
-    result = await tryGeoAPI(ip, geoViaFreeipapi);
-    if (result && result.latitude) return result;
-    return null;
-  }
-
-  // Geolocate a list of unique IPs, caching results (retries previous failures)
-  async function geolocateIPs(ips) {
-    // Re-attempt previously failed IPs (null in cache)
-    var toFetch = ips.filter(function(ip) {
-      return ip && ip.trim() && (geoCache[ip] === null || !geoCache.hasOwnProperty(ip));
-    });
-
-    for (var i = 0; i < toFetch.length; i += 5) {
-      var batch = toFetch.slice(i, i + 5);
-      await Promise.all(batch.map(function(ip) {
-        return geolocateSingle(ip).then(function(result) {
-          geoCache[ip] = result;
+      try {
+        // Utilise les play_records déjà chargés dans loadAll() — aucun appel réseau supplémentaire
+        var players = cachedPlayRecordsToday.filter(function(d) {
+          return d.ip && d.ip.trim();
         });
-      }));
-      if (i + 5 < toFetch.length) {
-        await new Promise(function(res) { setTimeout(res, 150); });
-      }
-    }
-    return geoCache;
-  }
 
-  // Load play_records for today, geolocate IPs, render map + country badges
-  async function loadGeoData() {
-    $('geo-loading').style.display = 'flex';
-    $('geo-content').style.display = 'none';
-    $('geo-empty').style.display   = 'none';
+        if (!players.length) {
+          $('geo-loading').style.display = 'none';
+          $('geo-empty').style.display   = 'block';
+          $('geo-empty').textContent = 'Aucune IP disponible pour aujourd\'hui. Les IPs sont enregistr\u00e9es dans play_records.';
+          return;
+        }
 
-    try {
-      // Query play_records since midnight UTC today
-      var todayStart = dateKey(0) + 'T00:00:00.000Z';
-      var prSnap = await getDocs(
-        query(collection(db, 'play_records'), where('ts', '>=', todayStart))
-      );
+        // Geolocate unique IPs
+        var uniqueIPs = players
+          .map(function(p) { return p.ip; })
+          .filter(function(v, i, a) { return a.indexOf(v) === i; });
 
-      var players = prSnap.docs
-        .map(function(d) { return d.data(); })
-        .filter(function(d) { return d.ip && d.ip.trim(); });
+        await geolocateIPs(uniqueIPs);
 
-      if (!players.length) {
+        // Filter players with valid geo
+        var located = players.filter(function(p) {
+          return geoCache[p.ip] && geoCache[p.ip].latitude;
+        });
+
+        $('geo-loading').style.display = 'none';
+
+        // Update attribution with live stats
+        $('geo-attr').innerHTML =
+          '\uD83D\uDCCC <a href="https://ipinfo.io" target="_blank" style="color:var(--blue)">ipinfo.io</a>' +
+          ' + <a href="https://freeipapi.com" target="_blank" style="color:var(--blue)">freeipapi.com</a>' +
+          ' &mdash; <strong>' + located.length + '</strong>/' + players.length + ' joueur(s) localis\u00e9(s)';
+
+        if (!located.length) {
+          $('geo-empty').style.display = 'block';
+          $('geo-empty').innerHTML =
+            '<strong>' + players.length + '</strong> joueur(s) avec IP trouv\u00e9(s), ' +
+            'mais ipinfo.io et freeipapi.com ont tous les deux \u00e9chou\u00e9 (r\u00e9seau ou IPs priv\u00e9es).<br>' +
+            '<span style="font-size:.74rem">V\u00e9rifie la console pour le d\u00e9tail.</span>';
+          return;
+        }
+
+        $('geo-content').style.display = 'block';
+
+        // Let the browser reflow geo-content before Leaflet reads container dimensions
+        await new Promise(function(r) { setTimeout(r, 60); });
+
+        renderMap(located);
+        renderCountryBadges(located);
+
+      } catch (e) {
+        console.warn('loadGeoData error:', e);
         $('geo-loading').style.display = 'none';
         $('geo-empty').style.display   = 'block';
-        $('geo-empty').textContent = 'Aucune IP disponible pour aujourd\'hui. Les IPs sont enregistr\u00e9es dans play_records.';
-        return;
+        $('geo-empty').textContent = 'Impossible de charger les donn\u00e9es de localisation : ' + e.message;
+      }
+    }
+
+    function renderMap(located) {
+      if (typeof L === 'undefined') return;
+
+      // Init map once
+      if (!leafletMap) {
+        leafletMap   = L.map('player-map', { scrollWheelZoom: false }).setView([20, 0], 2);
+        markersLayer = L.layerGroup().addTo(leafletMap);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+          subdomains: 'abcd',
+          maxZoom: 19
+        }).addTo(leafletMap);
+        leafletMap.invalidateSize();
+      } else {
+        markersLayer.clearLayers();
       }
 
-      // Geolocate unique IPs
-      var uniqueIPs = players
-        .map(function(p) { return p.ip; })
-        .filter(function(v, i, a) { return a.indexOf(v) === i; });
-
-      await geolocateIPs(uniqueIPs);
-
-      // Filter players with valid geo
-      var located = players.filter(function(p) {
-        return geoCache[p.ip] && geoCache[p.ip].latitude;
+      // ── Group players by IP → one marker per location ─────────────────────
+      var groups = {};
+      located.forEach(function(p) {
+        if (!groups[p.ip]) groups[p.ip] = { players: [], geo: geoCache[p.ip] };
+        groups[p.ip].players.push(p);
       });
 
-      $('geo-loading').style.display = 'none';
+      var bounds = [];
+      Object.keys(groups).forEach(function(ip) {
+        var g       = groups[ip];
+        var geo     = g.geo;
+        var players = g.players;
+        var count   = players.length;
+        var lat     = geo.latitude;
+        var lon     = geo.longitude;
+        var city    = geo.city         || '';
+        var country = geo.country_name || '';
 
-      // Update attribution with live stats
-      $('geo-attr').innerHTML =
-        '\uD83D\uDCCC <a href="https://ipinfo.io" target="_blank" style="color:var(--blue)">ipinfo.io</a>' +
-        ' + <a href="https://freeipapi.com" target="_blank" style="color:var(--blue)">freeipapi.com</a>' +
-        ' &mdash; <strong>' + located.length + '</strong>/' + players.length + ' joueur(s) localis\u00e9(s)';
+        bounds.push([lat, lon]);
 
-      if (!located.length) {
-        $('geo-empty').style.display = 'block';
-        $('geo-empty').innerHTML =
-          '<strong>' + players.length + '</strong> joueur(s) avec IP trouv\u00e9(s), ' +
-          'mais ipinfo.io et freeipapi.com ont tous les deux \u00e9chou\u00e9 (r\u00e9seau ou IPs priv\u00e9es).<br>' +
-          '<span style="font-size:.74rem">V\u00e9rifie la console pour le d\u00e9tail.</span>';
-        return;
+        // Popup: location header + one line per player
+        var locLine = city ? esc(city + (country ? ', ' + country : '')) : esc(country);
+        var popupHtml =
+          '<div style="font-family:system-ui;min-width:140px">' +
+          (locLine ? '<div style="font-size:.7rem;color:#888;margin-bottom:5px">' + locLine + '</div>' : '') +
+          players.map(function(p) {
+            return '<div style="font-weight:700;font-size:.88rem;padding:2px 0">' + esc(p.pseudo || '?') + '</div>';
+          }).join('') +
+          '</div>';
+
+        // Icon: numbered badge if several players, simple dot if one
+        var sz = count > 1 ? 28 : 14;
+        var iconHtml = count > 1
+          ? '<div style="width:' + sz + 'px;height:' + sz + 'px;background:#0a66c2;color:#fff;' +
+            'border:2.5px solid #fff;border-radius:50%;display:flex;align-items:center;' +
+            'justify-content:center;font-weight:900;font-size:11px;' +
+            'box-shadow:0 2px 8px rgba(10,102,194,.5);font-family:system-ui">' + count + '</div>'
+          : '<div style="width:' + sz + 'px;height:' + sz + 'px;background:#0a66c2;' +
+            'border:2.5px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(10,102,194,.4)"></div>';
+
+        var icon = L.divIcon({
+          html:       iconHtml,
+          className:  'misfit-mk',
+          iconSize:   [sz, sz],
+          iconAnchor: [sz / 2, sz / 2]
+        });
+
+        L.marker([lat, lon], { icon: icon })
+          .addTo(markersLayer)
+          .bindPopup(popupHtml);
+      });
+
+      if (bounds.length === 1) {
+        leafletMap.setView(bounds[0], 6);
+      } else if (bounds.length > 1) {
+        try { leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 7 }); }
+        catch (e) { leafletMap.setView([20, 0], 2); }
       }
 
-      $('geo-content').style.display = 'block';
-
-      // Let the browser reflow geo-content before Leaflet reads container dimensions
-      await new Promise(function(r) { setTimeout(r, 60); });
-
-      renderMap(located);
-      renderCountryBadges(located);
-
-    } catch (e) {
-      console.warn('loadGeoData error:', e);
-      $('geo-loading').style.display = 'none';
-      $('geo-empty').style.display   = 'block';
-      $('geo-empty').textContent = 'Impossible de charger les donn\u00e9es de localisation : ' + e.message;
-    }
-  }
-
-  function renderMap(located) {
-    if (typeof L === 'undefined') return;
-
-    // Init map once
-    if (!leafletMap) {
-      leafletMap   = L.map('player-map', { scrollWheelZoom: false }).setView([20, 0], 2);
-      markersLayer = L.layerGroup().addTo(leafletMap);
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19
-      }).addTo(leafletMap);
-      leafletMap.invalidateSize();
-    } else {
-      markersLayer.clearLayers();
+      setTimeout(function() { leafletMap.invalidateSize(); }, 150);
     }
 
-    // ── Group players by IP → one marker per location ─────────────────────
-    var groups = {};
-    located.forEach(function(p) {
-      if (!groups[p.ip]) groups[p.ip] = { players: [], geo: geoCache[p.ip] };
-      groups[p.ip].players.push(p);
-    });
-
-    var bounds = [];
-    Object.keys(groups).forEach(function(ip) {
-      var g       = groups[ip];
-      var geo     = g.geo;
-      var players = g.players;
-      var count   = players.length;
-      var lat     = geo.latitude;
-      var lon     = geo.longitude;
-      var city    = geo.city         || '';
-      var country = geo.country_name || '';
-
-      bounds.push([lat, lon]);
-
-      // Popup: location header + one line per player
-      var locLine = city ? esc(city + (country ? ', ' + country : '')) : esc(country);
-      var popupHtml =
-        '<div style="font-family:system-ui;min-width:140px">' +
-        (locLine ? '<div style="font-size:.7rem;color:#888;margin-bottom:5px">' + locLine + '</div>' : '') +
-        players.map(function(p) {
-          return '<div style="font-weight:700;font-size:.88rem;padding:2px 0">' + esc(p.pseudo || '?') + '</div>';
-        }).join('') +
-        '</div>';
-
-      // Icon: numbered badge if several players, simple dot if one
-      var sz = count > 1 ? 28 : 14;
-      var iconHtml = count > 1
-        ? '<div style="width:' + sz + 'px;height:' + sz + 'px;background:#0a66c2;color:#fff;' +
-          'border:2.5px solid #fff;border-radius:50%;display:flex;align-items:center;' +
-          'justify-content:center;font-weight:900;font-size:11px;' +
-          'box-shadow:0 2px 8px rgba(10,102,194,.5);font-family:system-ui">' + count + '</div>'
-        : '<div style="width:' + sz + 'px;height:' + sz + 'px;background:#0a66c2;' +
-          'border:2.5px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(10,102,194,.4)"></div>';
-
-      var icon = L.divIcon({
-        html:       iconHtml,
-        className:  'misfit-mk',
-        iconSize:   [sz, sz],
-        iconAnchor: [sz / 2, sz / 2]
+    function renderCountryBadges(located) {
+      var countries = {};
+      located.forEach(function(p) {
+        var geo  = geoCache[p.ip];
+        var code = geo.country_code || geo.country || 'XX';
+        var name = geo.country_name || code;
+        if (!countries[code]) countries[code] = { name: name, code: code, count: 0 };
+        countries[code].count++;
       });
 
-      L.marker([lat, lon], { icon: icon })
-        .addTo(markersLayer)
-        .bindPopup(popupHtml);
-    });
-
-    if (bounds.length === 1) {
-      leafletMap.setView(bounds[0], 6);
-    } else if (bounds.length > 1) {
-      try { leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 7 }); }
-      catch (e) { leafletMap.setView([20, 0], 2); }
-    }
-
-    setTimeout(function() { leafletMap.invalidateSize(); }, 150);
-  }
-
-  function renderCountryBadges(located) {
-    var countries = {};
-    located.forEach(function(p) {
-      var geo  = geoCache[p.ip];
-      var code = geo.country_code || geo.country || 'XX';
-      var name = geo.country_name || code;
-      if (!countries[code]) countries[code] = { name: name, code: code, count: 0 };
-      countries[code].count++;
-    });
-
-    var sorted = Object.values(countries).sort(function(a, b) { return b.count - a.count; });
-    var html   = '';
-    sorted.forEach(function(c) {
-      html += '<div class="country-badge" title="' + esc(c.name) + '">' +
-              '<span class="c-flag">' + flag(c.code) + '</span>' +
-              '<span class="c-name">' + esc(c.name) + '</span>' +
-              '<span class="c-count">' + c.count + '</span>' +
-              '</div>';
-    });
-    $('country-badges').innerHTML = html;
-  }
-
-  // ── Permission error helper ───────────────────────────────────────────────
-  function showPermError() {
-    var rules = [
-      'rules_version = \'2\';',
-      'service cloud.firestore {',
-      '  match /databases/{database}/documents {',
-      '    match /daily_puzzles/{doc} {',
-      '      allow read: if true;',
-      '      allow write: if false;',
-      '    }',
-      '    match /scores/{doc} {',
-      '      allow read: if true;',
-      '      allow write: if true;',
-      '    }',
-      '    match /play_records/{doc} {',
-      '      allow read: if true;',
-      '      allow write: if true;',
-      '    }',
-      '    match /streaks/{doc} {',
-      '      allow read: if true;',
-      '      allow write: if true;',
-      '    }',
-      '    match /daily_stats/{doc} {',
-      '      allow read: if true;',
-      '      allow write: if true;',
-      '    }',
-      '  }',
-      '}'
-    ].join('\n');
-
-    var el = $('perm-error');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'perm-error';
-      el.style.cssText = 'background:#fce8e6;border:1px solid #f5c2c1;border-radius:12px;padding:20px 24px;margin:20px 28px;font-size:.82rem;';
-      el.innerHTML =
-        '<div style="font-weight:800;font-size:1rem;color:#cc1016;margin-bottom:10px">&#128274; Firestore permission denied</div>' +
-        '<p style="margin-bottom:12px;color:#333">Tes r&egrave;gles Firestore ne couvrent pas toutes les collections lues par l\'admin.<br>' +
-        'Va dans <strong>Firebase Console &rsaquo; Firestore &rsaquo; Rules</strong> et remplace tout par :</p>' +
-        '<pre id="rules-pre" style="background:#1a1a1a;color:#7ec8e3;border-radius:8px;padding:14px;overflow-x:auto;font-size:.75rem;line-height:1.6;cursor:pointer;title:Cliquer pour copier"></pre>' +
-        '<p style="margin-top:10px;font-size:.74rem;color:var(--sub)">&#128073; Clique sur le bloc de code pour copier, puis publie dans Firebase Console.</p>';
-      var content = $('app').querySelector('.content');
-      content.insertBefore(el, content.firstChild);
-    }
-    var pre = document.getElementById('rules-pre');
-    pre.textContent = rules;
-    pre.onclick = function() {
-      navigator.clipboard && navigator.clipboard.writeText(rules).then(function() {
-        pre.style.outline = '2px solid #057647';
-        setTimeout(function() { pre.style.outline = ''; }, 1500);
+      var sorted = Object.values(countries).sort(function(a, b) { return b.count - a.count; });
+      var html   = '';
+      sorted.forEach(function(c) {
+        html += '<div class="country-badge" title="' + esc(c.name) + '">' +
+                '<span class="c-flag">' + flag(c.code) + '</span>' +
+                '<span class="c-name">' + esc(c.name) + '</span>' +
+                '<span class="c-count">' + c.count + '</span>' +
+                '</div>';
       });
-    };
-  }
-
-  // ── Render streak table ───────────────────────────────────────────────────
-  function renderStreaks(streaks) {
-    var tbody = $('t-streaks');
-    if (!streaks || !streaks.length) {
-      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--sub)">No streak data yet</td></tr>';
-      return;
+      $('country-badges').innerHTML = html;
     }
-    var medals = ['\ud83e\udd47', '\ud83e\udd48', '\ud83e\udd49'];
-    var html   = '';
-    streaks.forEach(function(e, i) {
-      var name = esc(e.pseudo || e._id || '?');
-      var rank = i < 3 ? medals[i] : ('#' + (i + 1));
-      html += '<tr>';
-      html += '<td style="font-weight:800">' + rank + '</td>';
-      html += '<td style="font-weight:700">' + name + '</td>';
-      html += '<td style="font-weight:800;color:var(--blue)">\ud83d\udd25 ' + (e.streak || 0) + ' days</td>';
-      html += '<td style="font-size:.73rem;color:var(--sub)">' + (e.lastPlayedDay || '\u2014') + '</td>';
-      html += '</tr>';
-    });
-    tbody.innerHTML = html;
-  }
+
+    // ── Render streak table ───────────────────────────────────────────────────
+    function renderStreaks(streaks) {
+      var tbody = $('t-streaks');
+      if (!streaks || !streaks.length) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--sub)">No streak data yet</td></tr>';
+        return;
+      }
+      var medals = ['\ud83e\udd47', '\ud83e\udd48', '\ud83e\udd49'];
+      var html   = '';
+      streaks.forEach(function(e, i) {
+        var name = esc(e.pseudo || e._id || '?');
+        var rank = i < 3 ? medals[i] : ('#' + (i + 1));
+        html += '<tr>';
+        html += '<td style="font-weight:800">' + rank + '</td>';
+        html += '<td style="font-weight:700">' + name + '</td>';
+        html += '<td style="font-weight:800;color:var(--blue)">\ud83d\udd25 ' + (e.streak || 0) + ' days</td>';
+        html += '<td style="font-size:.73rem;color:var(--sub)">' + (e.lastPlayedDay || '\u2014') + '</td>';
+        html += '</tr>';
+      });
+      tbody.innerHTML = html;
+    }
 
 </script>
 </body>
