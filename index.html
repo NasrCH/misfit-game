@@ -368,9 +368,9 @@
 
     <!-- GAME -->
     <div id="game-screen" class="screen">        <div class="game-header">
-            <div class="question-counter" id="question-counter">Question 1 / 5</div>
-            <div class="score-live" id="score-live">0 pts</div>
-        </div>
+        <div class="question-counter" id="question-counter">Question 1 / 5</div>
+        <div class="score-live" id="score-live">0 pts</div>
+    </div>
         <div class="progress-bar" id="dots-container"></div>
         <div class="timer-container"><div id="timer-fill" class="timer-fill"></div></div>
         <div class="topic-area">
@@ -404,785 +404,748 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
-    import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
-    import { initializeFirestore, persistentLocalCache, doc, getDoc, getDocFromCache, setDoc, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
+        const WORKER_URL = 'https://misfit-api.misfit-game.workers.dev';
 
-    const firebaseConfig = {
-        apiKey: "AIzaSyBEG9mOSns3-Gw1vAEnZILaIRKrVnweHdo",
-        authDomain: "misfit-game.firebaseapp.com",
-        projectId: "misfit-game",
-        storageBucket: "misfit-game.firebasestorage.app",
-        messagingSenderId: "394080113498",
-        appId: "1:394080113498:web:18e40d37027d00f67ed963"
-    };
-
-    const app = initializeApp(firebaseConfig);
-    // persistentLocalCache : stocke les documents Firestore dans IndexedDB.
-    // Le puzzle du jour est servi instantanément dès la 2ème visite (même navigateur).
-    const db  = initializeFirestore(app, { localCache: persistentLocalCache() });
-
-    // ─── State ────────────────────────────────────────────────────────────────
-    let puzzles         = [];
-    let currentIdx      = 0;
-    let totalScore      = 0;
-    let correctAnswers  = 0;
-    let timerId         = null;
-    let isTransitioning = false;
-    let questionResults = [];   // '✅' ou '❌' par question
-    let timerStart      = 0;
-    let currentStreak   = 0;
-    let cachedIp        = '';
-    let playerPseudo    = localStorage.getItem('misfit_pseudo') || '';
-    let dailyStreak     = 0;   // streak quotidien chargé depuis Firestore
-
-    const TIMER_DURATION_MS = 15000;  // ⬆️ 15 s par question (était 10 s)
-    const MAX_SCORE_PER_Q   = 500;
-    const MIN_SCORE_PER_Q   = 100;
-    const STREAK_BONUS      = 50;    // pts bonus par niveau de streak (≥ 2)
-
-    // ─── Helpers ──────────────────────────────────────────────────────────────
-
-    /** Clé unique du jour pour localStorage (ex: "2026-03-24") */
-    function getTodayKey() {
-        const d = new Date();
-        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    }
-
-    function getYesterdayKey() {
-        const d = new Date();
-        d.setDate(d.getDate() - 1);
-        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    }
-
-    /**
-     * Lit le streak depuis Firestore pour un pseudo donné.
-     * Retourne { streak, lastPlayedDay } ou { streak: 0, lastPlayedDay: '' }.
-     *
-     * Règle Firestore requise :
-     *   match /streaks/{doc} { allow read, write: if true; }
-     */
-    async function loadStreak(pseudo) {
-        if (!pseudo) return { streak: 0, lastPlayedDay: '' };
-        const slug = pseudo.toLowerCase().trim().replaceAll(/[^a-z0-9]/g, '_');
-        try {
-            const snap = await getDoc(doc(db, "streaks", slug));
-            if (snap.exists()) return snap.data();
-
-            // ── Migration : pas encore de document streak ─────────────────────
-            // Vérifier si le joueur a joué hier dans la collection scores
-            // (données existantes avant le déploiement de la feature streak).
-            // Si oui → on lui retourne lastPlayedDay = hier pour ne pas briser
-            // la continuité lors de son premier updateStreak() aujourd'hui.
-            const yesterdayKey  = getYesterdayKey();
-            const snapYesterday = await getDoc(doc(db, "scores", `${yesterdayKey}_${slug}`));
-            if (snapYesterday.exists()) {
-                return { streak: 1, lastPlayedDay: yesterdayKey };
-            }
-
-            return { streak: 0, lastPlayedDay: '' };
-        } catch (e) {
-            console.warn('loadStreak failed:', e);
-            return { streak: 0, lastPlayedDay: '' };
+        // ─── Worker helpers ───────────────────────────────────────────────────────
+        async function wGet(path) {
+            const res = await fetch(WORKER_URL + path);
+            if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
+            return res.json();
         }
-    }
-
-    /**
-     * Calcule et sauvegarde le nouveau streak dans Firestore.
-     * - Joué hier      → streak + 1
-     * - Déjà joué auj. → inchangé (idempotent, safe à appeler plusieurs fois)
-     * - Interruption   → reset à 1
-     */
-    async function updateStreak(pseudo) {
-        if (!pseudo) return 0;
-        const slug         = pseudo.toLowerCase().trim().replaceAll(/[^a-z0-9]/g, '_');
-        const todayKey     = getTodayKey();
-        const yesterdayKey = getYesterdayKey();
-        const data         = await loadStreak(pseudo);
-        const lastDay      = data.lastPlayedDay || '';
-        let   streak       = data.streak || 0;
-
-        if (lastDay === todayKey) {
-            dailyStreak = streak;
-            return streak;
-        } else if (lastDay === yesterdayKey) {
-            streak += 1;
-        } else {
-            streak = 1;
-        }
-
-        dailyStreak = streak;
-
-        try {
-            await setDoc(doc(db, "streaks", slug), {
-                pseudo:        pseudo,
-                streak:        streak,
-                lastPlayedDay: todayKey,
-                updatedAt:     new Date().toISOString(),
+        async function wPost(path, body) {
+            const res = await fetch(WORKER_URL + path, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
             });
-        } catch (e) {
-            console.warn('updateStreak save failed:', e);
+            if (!res.ok) throw new Error(`POST ${path} → ${res.status}`);
+            return res.json();
         }
 
-        return streak;
-    }
 
-    /** Retourne le label du streak avec emoji selon le palier. */
-    function getStreakLabel(streak) {
-        if (streak >= 365) return `🔥 ${streak} days — Legendary! 👑`;
-        if (streak >= 30)  return `🔥 ${streak} day streak! 🏅`;
-        if (streak >= 7)   return `🔥 ${streak} day streak! ⚡`;
-        if (streak === 1)  return `🔥 Day 1 — come back tomorrow!`;
-        return `🔥 ${streak} day streak!`;
-    }
+        // ─── State ────────────────────────────────────────────────────────────────
+        let puzzles         = [];
+        let currentIdx      = 0;
+        let totalScore      = 0;
+        let correctAnswers  = 0;
+        let timerId         = null;
+        let isTransitioning = false;
+        let questionResults = [];   // '✅' ou '❌' par question
+        let timerStart      = 0;
+        let currentStreak   = 0;
+        let cachedIp        = '';
+        let playerPseudo    = localStorage.getItem('misfit_pseudo') || '';
+        let dailyStreak     = 0;   // streak quotidien chargé depuis Firestore
 
+        const TIMER_DURATION_MS = 15000;  // ⬆️ 15 s par question (était 10 s)
+        const MAX_SCORE_PER_Q   = 500;
+        const MIN_SCORE_PER_Q   = 100;
+        const STREAK_BONUS      = 50;    // pts bonus par niveau de streak (≥ 2)
 
-    /**
-     * ID du document Firestore = numéro du jour du mois (1→31).
-     * Les puzzles sont stockés avec les IDs "1" à "31" dans la collection daily_puzzles.
-     * Ex : 24 mars → document "24"
-     */
-    function getTodayPuzzleId() {
-        return String(new Date().getDate());
-    }
+        // ─── Helpers ──────────────────────────────────────────────────────────────
 
-    function showToast(msg, duration = 2000) {
-        const t = document.getElementById('toast');
-        t.textContent = msg;
-        t.classList.add('show');
-        setTimeout(() => t.classList.remove('show'), duration);
-    }
-
-    function showScreen(id) {
-        ['intro-screen','pseudo-screen','game-screen','result-screen'].forEach(s => {
-            document.getElementById(s).classList.toggle('active', s === id);
-        });
-    }
-
-    /** FIX: Fisher-Yates shuffle — sort(() => Math.random()-0.5) est biaisé */
-    function shuffle(arr) {
-        const a = [...arr];
-        for (let i = a.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [a[i], a[j]] = [a[j], a[i]];
+        /** Clé unique du jour pour localStorage (ex: "2026-03-24") */
+        function getTodayKey() {
+            const d = new Date();
+            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
         }
-        return a;
-    }
 
-    /**
-     * Lecture cache-first : IndexedDB d'abord (~5 ms), réseau si absent.
-     * Réduit drastiquement le temps de chargement dès la 2ème visite.
-     */
-    async function getDocFast(docRef) {
-        try {
-            return await getDocFromCache(docRef);
-        } catch (e) {
-            console.warn('cache miss, fetching from network:', e);
-            return await getDoc(docRef);
+        function getYesterdayKey() {
+            const d = new Date();
+            d.setDate(d.getDate() - 1);
+            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
         }
-    }
 
-    // ─── Device ID v4 : IP publique uniquement ───────────────────────────────
-    //
-    // V1/V2 : userAgent + canvas       → différent par navigateur ❌
-    // V3    : IP + hardware (platform, screen…) → Brave randomise screen en privé ❌
-    // V4    : IP seule, hashée en SHA-256
-    //         → identique dans Firefox / Chrome / Brave / privé / normal ✅
-    //
-    // Fallback si IP indisponible : ID aléatoire scopé à la session (sessionStorage).
-    // Dans ce cas le joueur POURRAIT rejouer en rouvrant la fenêtre privée,
-    // mais c'est acceptable si le service IP est hors-ligne.
-
-    /** Récupère l'IP publique. Mise en cache dans sessionStorage pour la session. */
-    async function getPublicIp() {
-        try {
-            const c = sessionStorage.getItem('misfit_ip');
-            if (c) { cachedIp = c; return c; }
-        } catch (e) { console.warn('ss ip read', e); }
-
-        try {
-            const ctrl = new AbortController();
-            const tid  = setTimeout(() => ctrl.abort(), 2000);
-            const res  = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
-            clearTimeout(tid);
-            cachedIp = (await res.json()).ip || '';
-            try { sessionStorage.setItem('misfit_ip', cachedIp); } catch (e) { console.warn('ss ip write', e); }
-            return cachedIp;
-        } catch (e) {
-            console.warn('IP fetch failed — fallback to session ID:', e);
-            return '';
-        }
-    }
-
-    /**
-     * Retourne un ID stable basé sur le hash SHA-256 de l'IP publique.
-     * Pas de cache localStorage : l'IP étant en sessionStorage, le recalcul
-     * est instantané et évite tout problème d'ID périmé entre sessions.
-     */
-    async function getDeviceId() {
-        const ip = await getPublicIp();
-
-        if (!ip) {
-            // Fallback : ID aléatoire scopé à la session courante
-            let sid = null;
-            try { sid = sessionStorage.getItem('misfit_session_id'); } catch (e) { console.warn('ss sid read', e); }
-            if (!sid) {
-                const arr = new Uint8Array(12);
-                crypto.getRandomValues(arr);
-                sid = Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
-                try { sessionStorage.setItem('misfit_session_id', sid); } catch (e) { console.warn('ss sid write', e); }
+        /**
+         * Lit le streak depuis Firestore pour un pseudo donné.
+         * Retourne { streak, lastPlayedDay } ou { streak: 0, lastPlayedDay: '' }.
+         *
+         * Règle Firestore requise :
+         *   match /streaks/{doc} { allow read, write: if true; }
+         */
+        async function loadStreak(pseudo) {
+            if (!pseudo) return { streak: 0, lastPlayedDay: '' };
+            try {
+                return await wGet('/api/streak/' + encodeURIComponent(pseudo));
+            } catch (e) {
+                console.warn('loadStreak failed:', e);
+                return { streak: 0, lastPlayedDay: '' };
             }
-            return sid;
         }
 
-        // Hash SHA-256(IP + pseudo) → identifiant unique par personne
-        // Même réseau WiFi : pseudo différent = hash différent = peut jouer ✅
-        const raw = ip + '###' + playerPseudo.toLowerCase().trim();
-        const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
-        return Array.from(new Uint8Array(buf))
-            .map(b => b.toString(16).padStart(2, '0'))
-            .join('')
-            .substring(0, 24);
-    }
 
-    /** Vérifie dans Firestore si ce device a déjà joué aujourd'hui. */
-    async function checkAlreadyPlayed(deviceId, todayKey) {
-        try {
-            const snap = await getDocFast(doc(db, "play_records", `${deviceId}_${todayKey}`));
-            return snap.exists() ? snap.data() : null;
-        } catch (e) {
-            console.warn("checkAlreadyPlayed failed (fail-open):", e);
-            return null;
+        /**
+         * Calcule et sauvegarde le nouveau streak dans Firestore.
+         * - Joué hier      → streak + 1
+         * - Déjà joué auj. → inchangé (idempotent, safe à appeler plusieurs fois)
+         * - Interruption   → reset à 1
+         */
+        async function updateStreak(pseudo) {
+            if (!pseudo) return 0;
+            try {
+                const result = await wPost('/api/streak/update', { pseudo });
+                dailyStreak  = result.streak || 0;
+                return result.streak || 0;
+            } catch (e) {
+                console.warn('updateStreak failed:', e);
+                return 0;
+            }
         }
-    }
 
-    /** Sauvegarde la partie dans Firestore (anti-replay + leaderboard). */
-    async function savePlayRecord(deviceId, todayKey) {
-        const pseudoSlug = playerPseudo.toLowerCase().trim().replaceAll(/[^a-z0-9]/g, '_');
-        try {
-            // 1) Enregistrement anti-replay (clé = hash(IP+pseudo) + date)
-            await setDoc(doc(db, "play_records", `${deviceId}_${todayKey}`), {
+        /** Retourne le label du streak avec emoji selon le palier. */
+        function getStreakLabel(streak) {
+            if (streak >= 365) return `🔥 ${streak} days — Legendary! 👑`;
+            if (streak >= 30)  return `🔥 ${streak} day streak! 🏅`;
+            if (streak >= 7)   return `🔥 ${streak} day streak! ⚡`;
+            if (streak === 1)  return `🔥 Day 1 — come back tomorrow!`;
+            return `🔥 ${streak} day streak!`;
+        }
+
+
+        /**
+         * ID du document Firestore = numéro du jour du mois (1→31).
+         * Les puzzles sont stockés avec les IDs "1" à "31" dans la collection daily_puzzles.
+         * Ex : 24 mars → document "24"
+         */
+        function getTodayPuzzleId() {
+            return String(new Date().getDate());
+        }
+
+        function showToast(msg, duration = 2000) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), duration);
+        }
+
+        function showScreen(id) {
+            ['intro-screen','pseudo-screen','game-screen','result-screen'].forEach(s => {
+                document.getElementById(s).classList.toggle('active', s === id);
+            });
+        }
+
+        /** FIX: Fisher-Yates shuffle — sort(() => Math.random()-0.5) est biaisé */
+        function shuffle(arr) {
+            const a = [...arr];
+            for (let i = a.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [a[i], a[j]] = [a[j], a[i]];
+            }
+            return a;
+        }
+
+        // ─── Device ID v4 : IP publique uniquement ───────────────────────────────
+        //
+        // V1/V2 : userAgent + canvas       → différent par navigateur ❌
+        // V3    : IP + hardware (platform, screen…) → Brave randomise screen en privé ❌
+        // V4    : IP seule, hashée en SHA-256
+        //         → identique dans Firefox / Chrome / Brave / privé / normal ✅
+        //
+        // Fallback si IP indisponible : ID aléatoire scopé à la session (sessionStorage).
+        // Dans ce cas le joueur POURRAIT rejouer en rouvrant la fenêtre privée,
+        // mais c'est acceptable si le service IP est hors-ligne.
+
+        /** Récupère l'IP publique. Mise en cache dans sessionStorage pour la session. */
+        async function getPublicIp() {
+            try {
+                const c = sessionStorage.getItem('misfit_ip');
+                if (c) { cachedIp = c; return c; }
+            } catch (e) { console.warn('ss ip read', e); }
+
+            try {
+                const ctrl = new AbortController();
+                const tid  = setTimeout(() => ctrl.abort(), 2000);
+                const res  = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
+                clearTimeout(tid);
+                cachedIp = (await res.json()).ip || '';
+                try { sessionStorage.setItem('misfit_ip', cachedIp); } catch (e) { console.warn('ss ip write', e); }
+                return cachedIp;
+            } catch (e) {
+                console.warn('IP fetch failed — fallback to session ID:', e);
+                return '';
+            }
+        }
+
+        /**
+         * Retourne un ID stable basé sur le hash SHA-256 de l'IP publique.
+         * Pas de cache localStorage : l'IP étant en sessionStorage, le recalcul
+         * est instantané et évite tout problème d'ID périmé entre sessions.
+         */
+        async function getDeviceId() {
+            const ip = await getPublicIp();
+
+            if (!ip) {
+                // Fallback : ID aléatoire scopé à la session courante
+                let sid = null;
+                try { sid = sessionStorage.getItem('misfit_session_id'); } catch (e) { console.warn('ss sid read', e); }
+                if (!sid) {
+                    const arr = new Uint8Array(12);
+                    crypto.getRandomValues(arr);
+                    sid = Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+                    try { sessionStorage.setItem('misfit_session_id', sid); } catch (e) { console.warn('ss sid write', e); }
+                }
+                return sid;
+            }
+
+            // Hash SHA-256(IP + pseudo) → identifiant unique par personne
+            // Même réseau WiFi : pseudo différent = hash différent = peut jouer ✅
+            const raw = ip + '###' + playerPseudo.toLowerCase().trim();
+            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+            return Array.from(new Uint8Array(buf))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('')
+                .substring(0, 24);
+        }
+
+        /** Vérifie dans Firestore si ce device a déjà joué aujourd'hui. */
+        async function checkAlreadyPlayed(deviceId, todayKey) {
+            try {
+                const data = await wGet(`/api/played/${deviceId}/${todayKey}`);
+                return data.played ? data.record : null;
+            } catch (e) {
+                console.warn('checkAlreadyPlayed failed (fail-open):', e);
+                return null;
+            }
+        }
+
+        /** Sauvegarde la partie dans Firestore (anti-replay + leaderboard). */
+        function savePlayRecord(deviceId, todayKey) {
+            wPost('/api/record', {
+                deviceId,
+                date:    todayKey,
                 pseudo:  playerPseudo,
                 score:   totalScore,
                 correct: correctAnswers,
                 results: questionResults,
                 total:   puzzles.length,
                 ip:      cachedIp,
-                ts:      new Date().toISOString(),
-            });
-            // 2) Score pour le leaderboard (1 entrée par pseudo par jour)
-            await setDoc(doc(db, "scores", `${todayKey}_${pseudoSlug}`), {
-                pseudo:  playerPseudo,
-                score:   totalScore,
-                correct: correctAnswers,
-                total:   puzzles.length,
-                date:    todayKey,
-                ts:      new Date().toISOString(),
-            });
-        } catch (e) {
-            console.warn("Could not save play record to Firestore:", e);
+            }).catch(e => console.warn('savePlayRecord failed:', e));
         }
-    }
 
-    /** Charge et affiche le Top 10 du jour. */
-    async function loadLeaderboard() {
-        const lbEl     = document.getElementById('lb-list');
-        const todayKey = getTodayKey();
-        lbEl.innerHTML = '<div class="lb-empty">Loading…</div>';
+        /** Charge et affiche le Top 10 du jour. */
+        async function loadLeaderboard() {
+            const lbEl     = document.getElementById('lb-list');
+            const todayKey = getTodayKey();
+            lbEl.innerHTML = '<div class="lb-empty">Loading…</div>';
 
-        try {
-            const snaps    = await getDocs(query(collection(db, 'scores'), where('date', '==', todayKey)));
-            let allEntries = snaps.docs.map(d => d.data());
-            const myKey    = playerPseudo.trim().toLowerCase();
+            try {
+                const data       = await wGet('/api/leaderboard/' + todayKey);
+                let   allEntries = data.entries || [];
+                const myKey      = playerPseudo.trim().toLowerCase();
 
-            // ── Injection optimiste ───────────────────────────────────────────
-            // savePlayRecord() tourne en arrière-plan : si le score n'est pas
-            // encore dans Firestore, on l'injecte localement pour l'affichage
-            // immédiat sans attendre la confirmation réseau.
-            const alreadySaved = allEntries.some(e => e.pseudo.trim().toLowerCase() === myKey);
-            const myTotal      = puzzles.length || Number(localStorage.getItem('misfit_total')) || 5;
-            if (!alreadySaved && playerPseudo && totalScore > 0) {
-                allEntries.push({
-                    pseudo:  playerPseudo,
-                    score:   totalScore,
-                    correct: correctAnswers,
-                    total:   myTotal,
-                    date:    todayKey,
-                });
+                // Injection optimiste (score pas encore visible dans Firestore)
+                const alreadySaved = allEntries.some(e => e.pseudo.trim().toLowerCase() === myKey);
+                const myTotal      = puzzles.length || Number(localStorage.getItem('misfit_total')) || 5;
+                if (!alreadySaved && playerPseudo && totalScore > 0) {
+                    allEntries.push({ pseudo: playerPseudo, score: totalScore,
+                                      correct: correctAnswers, total: myTotal, date: todayKey });
+                }
+
+                allEntries.sort((a, b) => b.score - a.score);
+                const myRankIdx = allEntries.findIndex(e => e.pseudo.trim().toLowerCase() === myKey);
+                const myRank    = myRankIdx >= 0 ? myRankIdx + 1 : null;
+                const inTop10   = myRankIdx >= 0 && myRankIdx < 10;
+                const top10     = allEntries.slice(0, 10);
+
+                if (top10.length === 0) {
+                    lbEl.innerHTML = '<div class="lb-empty">No scores yet today. Be the first! 🚀</div>';
+                    return;
+                }
+
+                const medals = ['🥇', '🥈', '🥉'];
+                let html = '';
+                if (!inTop10 && playerPseudo) {
+                    const rankTxt = myRank ? `You're <strong>#${myRank}</strong> today with <strong>${totalScore} pts</strong>.<br>` : '';
+                    html += `<div class="lb-encourage">${rankTxt}Not in the top 10 yet — come back tomorrow and climb the board! 🚀</div>`;
+                }
+                html += top10.map((e, i) => {
+                    const isMe = e.pseudo.trim().toLowerCase() === myKey;
+                    const rank = i < 3 ? medals[i] : `${i + 1}`;
+                    return `<div class="lb-row ${isMe ? 'is-me' : ''}">
+                        <span class="lb-rank">${rank}</span>
+                        <span class="lb-name ${isMe ? 'is-me' : ''}">${escapeHtml(e.pseudo)}${isMe ? ' 👈' : ''}</span>
+                        <span class="lb-correct">${e.correct}/${e.total}</span>
+                        <span class="lb-score">${e.score} pts</span>
+                    </div>`;
+                }).join('');
+
+                lbEl.innerHTML = html;
+            } catch (e) {
+                console.warn('Leaderboard load failed:', e);
+                lbEl.innerHTML = '<div class="lb-empty">Could not load leaderboard.</div>';
             }
+        }
 
-            // Trier pour calculer le rang global du joueur
-            allEntries.sort((a, b) => b.score - a.score);
-            const myRankIdx = allEntries.findIndex(e => e.pseudo.trim().toLowerCase() === myKey);
-            const myRank    = myRankIdx >= 0 ? myRankIdx + 1 : null;
-            const inTop10   = myRankIdx >= 0 && myRankIdx < 10;
-            const top10     = allEntries.slice(0, 10);
+        function escapeHtml(str) {
+            return str.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+        }
 
-            if (top10.length === 0) {
-                lbEl.innerHTML = '<div class="lb-empty">No scores yet today. Be the first! 🚀</div>';
+        // ─── Load ─────────────────────────────────────────────────────────────────
+        // ─── Puzzle via Worker (réponses cachées côté serveur) ────────────────────
+        async function fetchPuzzleFromWorker() {
+            const cacheKey = `misfit_wpuzzle_${getTodayKey()}`;
+            // Cache sessionStorage pour éviter un appel réseau à chaque écran
+            const cached = sessionStorage.getItem(cacheKey);
+            if (cached) return JSON.parse(cached);
+
+            const ctrl = new AbortController();
+            const tid  = setTimeout(() => ctrl.abort(), 6000);
+            const res  = await fetch(`${WORKER_URL}/api/puzzle/${getTodayPuzzleId()}`, { signal: ctrl.signal });
+            clearTimeout(tid);
+
+            if (res.status === 404) throw Object.assign(new Error("NO_DOC"),       { code: 'not-found' });
+            if (!res.ok)            throw Object.assign(new Error("FETCH_ERROR"),   { code: 'network'   });
+
+            const data = await res.json();
+            if (!data.questions?.length) throw Object.assign(new Error("NO_QUESTIONS"), { code: 'malformed' });
+
+            try { sessionStorage.setItem(cacheKey, JSON.stringify(data)); } catch (_) {}
+            return data;
+        }
+
+        async function loadData() {
+            const todayKey   = getTodayKey();
+            const lastPlayed = localStorage.getItem('misfit_day');
+            const btn        = document.getElementById('start-btn');
+
+            // Animation de points pendant le chargement
+            let dotCount = 0;
+            const dotTimer = setInterval(() => {
+                dotCount = (dotCount + 1) % 4;
+                btn.textContent = 'Loading' + '·'.repeat(dotCount);
+            }, 350);
+
+            // ── Chemin rapide : localStorage a déjà la partie du jour ──────────
+            if (lastPlayed === todayKey) {
+                clearInterval(dotTimer);
+                btn.classList.remove('is-loading');
+                playerPseudo    = localStorage.getItem('misfit_pseudo') || '';
+                totalScore      = Number(localStorage.getItem('misfit_score'))   || 0;
+                correctAnswers  = Number(localStorage.getItem('misfit_correct')) || 0;
+                questionResults = JSON.parse(localStorage.getItem('misfit_results') || '[]');
+                // Charger le streak depuis Firestore (persistant cross-device)
+                if (playerPseudo) {
+                    const sd = await loadStreak(playerPseudo);
+                    dailyStreak = sd.streak || 0;
+                }
+                showResults();
                 return;
             }
 
-            const medals = ['🥇', '🥈', '🥉'];
+            try {
+                // Lancer la requête du compteur en parallèle dès le début (non-bloquant)
+                const countPromise = wGet('/api/count/' + todayKey)
+                    .then(data => {
+                        const n  = data.count || 0;
+                        const el = document.getElementById('stats-line');
+                        if (el && n > 0) {
+                            const fmt = n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+                            el.textContent = `👥 ${fmt} ${n === 1 ? 'player' : 'players'} played today`;
+                        }
+                    }).catch(() => {});
 
-            // ── Message d'encouragement AVANT le top 10 ──────────────────────
-            let html = '';
-            if (!inTop10 && playerPseudo) {
-                const rankTxt = myRank ? `You're <strong>#${myRank}</strong> today with <strong>${totalScore} pts</strong>.<br>` : '';
-                html += `
-                <div class="lb-encourage">
-                    ${rankTxt}
-                    Not in the top 10 yet — come back tomorrow and climb the board! 🚀
-                </div>`;
+                // Charger le puzzle via Worker (réponses cachées) + IP en parallèle
+                const [puzzleData] = await Promise.all([
+                    fetchPuzzleFromWorker(),
+                    getPublicIp(),
+                    countPromise,
+                ]);
+                puzzles = puzzleData.questions;
+
+                btn.textContent = "Play Now ▶";
+                btn.disabled    = false;
+
+
+            } catch (err) {
+                console.error("Firebase error:", err);
+                const banner = document.getElementById('error-banner');
+                if (err.code === 'permission-denied') {
+                    banner.textContent = "⚠️ Firestore permission denied. Update your security rules in Firebase Console.";
+                } else if (err.message === 'NO_DOC') {
+                    banner.textContent = `⚠️ No puzzle found for day ${getTodayPuzzleId()} in Firestore. Please add the puzzle data.`;
+                } else if (err.message === 'NO_QUESTIONS') {
+                    banner.textContent = "⚠️ Puzzle data is malformed. Expected a 'questions' array in the document.";
+                } else {
+                    banner.textContent = "⚠️ Could not load today's puzzle. Check your connection and refresh.";
+                }
+                banner.classList.add('visible');
+            } finally {
+                clearInterval(dotTimer);
+                btn.classList.remove('is-loading');
             }
-
-            html += top10.map((e, i) => {
-                const isMe = e.pseudo.trim().toLowerCase() === myKey;
-                const rank = i < 3 ? medals[i] : `${i + 1}`;
-                return `
-                <div class="lb-row ${isMe ? 'is-me' : ''}">
-                    <span class="lb-rank">${rank}</span>
-                    <span class="lb-name ${isMe ? 'is-me' : ''}">${escapeHtml(e.pseudo)}${isMe ? ' 👈' : ''}</span>
-                    <span class="lb-correct">${e.correct}/${e.total}</span>
-                    <span class="lb-score">${e.score} pts</span>
-                </div>`;
-            }).join('');
-
-
-            lbEl.innerHTML = html;
-        } catch (e) {
-            console.warn('Leaderboard load failed:', e);
-            lbEl.innerHTML = '<div class="lb-empty">Could not load leaderboard.</div>';
-        }
-    }
-
-    function escapeHtml(str) {
-        return str.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-    }
-
-    // ─── Load ─────────────────────────────────────────────────────────────────
-
-    async function loadData() {
-        const todayKey   = getTodayKey();
-        const lastPlayed = localStorage.getItem('misfit_day');
-        const btn        = document.getElementById('start-btn');
-
-        // Animation de points pendant le chargement
-        let dotCount = 0;
-        const dotTimer = setInterval(() => {
-            dotCount = (dotCount + 1) % 4;
-            btn.textContent = 'Loading' + '·'.repeat(dotCount);
-        }, 350);
-
-        // ── Chemin rapide : localStorage a déjà la partie du jour ──────────
-        if (lastPlayed === todayKey) {
-            clearInterval(dotTimer);
-            btn.classList.remove('is-loading');
-            playerPseudo    = localStorage.getItem('misfit_pseudo') || '';
-            totalScore      = Number(localStorage.getItem('misfit_score'))   || 0;
-            correctAnswers  = Number(localStorage.getItem('misfit_correct')) || 0;
-            questionResults = JSON.parse(localStorage.getItem('misfit_results') || '[]');
-            // Charger le streak depuis Firestore (persistant cross-device)
-            if (playerPseudo) {
-                const sd = await loadStreak(playerPseudo);
-                dailyStreak = sd.streak || 0;
-            }
-            showResults();
-            return;
         }
 
-        try {
-            // Lancer la requête du compteur en parallèle dès le début (non-bloquant)
-            const countPromise = getDocs(query(collection(db, 'scores'), where('date', '==', todayKey)))
-                .then(snaps => {
-                    const n  = snaps.size;
-                    const el = document.getElementById('stats-line');
-                    if (el && n > 0) {
-                        const fmt = n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
-                        el.textContent = `👥 ${fmt} ${n === 1 ? 'player' : 'players'} played today`;
+        // ─── Game init ────────────────────────────────────────────────────────────
+
+        // "Play Now" → écran pseudo (pré-remplit avec le pseudo enregistré)
+        document.getElementById('start-btn').addEventListener('click', () => {
+            const saved = localStorage.getItem('misfit_pseudo') || '';
+            const input = document.getElementById('pseudo-input');
+            input.value = saved;
+            document.getElementById('pseudo-btn').disabled      = saved.trim().length < 2;
+            document.getElementById('pseudo-error').textContent = '';
+
+            // Charger le streak depuis Firestore en background (non-bloquant)
+            const motivEl = document.getElementById('streak-motivation');
+            motivEl.classList.remove('visible');
+            motivEl.textContent = '';
+            if (saved.trim().length >= 2) {
+                loadStreak(saved).then(sd => {
+                    const streak  = sd.streak || 0;
+                    const lastDay = sd.lastPlayedDay || '';
+                    if (streak >= 1 && lastDay === getYesterdayKey()) {
+                        motivEl.textContent = streak >= 2
+                            ? `🔥 ${streak}-day streak — keep it going!`
+                            : `🔥 Day 1 yesterday — build your streak today!`;
+                        motivEl.classList.add('visible');
                     }
                 }).catch(() => {});
-
-            // Charger le puzzle + pré-chauffer l'IP en parallèle
-            const [snap] = await Promise.all([
-                getDocFast(doc(db, "daily_puzzles", getTodayPuzzleId())),
-                getPublicIp(),
-                countPromise,
-            ]);
-
-            if (!snap.exists()) {
-                throw Object.assign(new Error("NO_DOC"), { code: 'not-found' });
-            }
-            puzzles = snap.data().questions;
-            if (!Array.isArray(puzzles) || puzzles.length === 0) {
-                throw Object.assign(new Error("NO_QUESTIONS"), { code: 'malformed' });
             }
 
-            btn.textContent = "Play Now ▶";
-            btn.disabled    = false;
+            showScreen('pseudo-screen');
+            if (!saved) input.focus();
+        });
 
+        document.getElementById('share-btn').addEventListener('click', shareResults);
 
-        } catch (err) {
-            console.error("Firebase error:", err);
-            const banner = document.getElementById('error-banner');
-            if (err.code === 'permission-denied') {
-                banner.textContent = "⚠️ Firestore permission denied. Update your security rules in Firebase Console.";
-            } else if (err.message === 'NO_DOC') {
-                banner.textContent = `⚠️ No puzzle found for day ${getTodayPuzzleId()} in Firestore. Please add the puzzle data.`;
-            } else if (err.message === 'NO_QUESTIONS') {
-                banner.textContent = "⚠️ Puzzle data is malformed. Expected a 'questions' array in the document.";
-            } else {
-                banner.textContent = "⚠️ Could not load today's puzzle. Check your connection and refresh.";
+        // ── Pseudo screen : validation + vérification Firestore ───────────────
+        const pseudoInput = document.getElementById('pseudo-input');
+        const pseudoBtn   = document.getElementById('pseudo-btn');
+
+        pseudoInput.addEventListener('input', () => {
+            pseudoBtn.disabled = pseudoInput.value.trim().length < 2;
+            document.getElementById('pseudo-error').textContent = '';
+        });
+        pseudoInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !pseudoBtn.disabled) submitPseudo();
+        });
+        pseudoBtn.addEventListener('click', submitPseudo);
+
+        async function submitPseudo() {
+            const raw   = pseudoInput.value.trim();
+            const errEl = document.getElementById('pseudo-error');
+
+            if (raw.length < 2)  { errEl.textContent = 'Name must be at least 2 characters.'; return; }
+            if (raw.length > 20) { errEl.textContent = 'Name must be 20 characters or less.';  return; }
+            if (!/^[A-Za-z0-9 \-_]+$/.test(raw)) {
+                errEl.textContent = 'Letters, numbers, spaces, - and _ only.'; return;
             }
-            banner.classList.add('visible');
-        } finally {
-            clearInterval(dotTimer);
-            btn.classList.remove('is-loading');
+
+            playerPseudo = raw;
+            localStorage.setItem('misfit_pseudo', raw);
+
+            pseudoBtn.textContent = 'Checking…';
+            pseudoBtn.disabled    = true;
+
+            // Vérifier si ce pseudo a déjà joué aujourd'hui (anti-replay + navigation privée)
+            const todayKey = getTodayKey();
+            const deviceId = await getDeviceId();
+            const record   = await checkAlreadyPlayed(deviceId, todayKey);
+
+            if (record) {
+                totalScore      = record.score   || 0;
+                correctAnswers  = record.correct || 0;
+                questionResults = record.results || [];
+                localStorage.setItem('misfit_day',     todayKey);
+                localStorage.setItem('misfit_score',   String(totalScore));
+                localStorage.setItem('misfit_correct', String(correctAnswers));
+                localStorage.setItem('misfit_results', JSON.stringify(questionResults));
+                localStorage.setItem('misfit_total',   String(puzzles.length));
+                // Idempotent : si déjà compté aujourd'hui ne fait rien, sinon incrémente
+                await updateStreak(playerPseudo);
+                showResults();
+                return;
+            }
+
+            pseudoBtn.textContent = 'Start Game ▶';
+            pseudoBtn.disabled    = false;
+            initGame();
         }
-    }
 
-    // ─── Game init ────────────────────────────────────────────────────────────
+        function initGame() {
+            showScreen('game-screen');
+            createDots();
+            loadLevel();
+        }
 
-    // "Play Now" → écran pseudo (pré-remplit avec le pseudo enregistré)
-    document.getElementById('start-btn').addEventListener('click', () => {
-        const saved = localStorage.getItem('misfit_pseudo') || '';
-        const input = document.getElementById('pseudo-input');
-        input.value = saved;
-        document.getElementById('pseudo-btn').disabled      = saved.trim().length < 2;
-        document.getElementById('pseudo-error').textContent = '';
 
-        // Charger le streak depuis Firestore en background (non-bloquant)
-        const motivEl = document.getElementById('streak-motivation');
-        motivEl.classList.remove('visible');
-        motivEl.textContent = '';
-        if (saved.trim().length >= 2) {
-            loadStreak(saved).then(sd => {
-                const streak  = sd.streak || 0;
-                const lastDay = sd.lastPlayedDay || '';
-                if (streak >= 1 && lastDay === getYesterdayKey()) {
-                    motivEl.textContent = streak >= 2
-                        ? `🔥 ${streak}-day streak — keep it going!`
-                        : `🔥 Day 1 yesterday — build your streak today!`;
-                    motivEl.classList.add('visible');
+        function createDots() {
+            const container = document.getElementById('dots-container');
+            container.innerHTML = puzzles.map((_, i) =>
+                `<div class="dot" aria-label="Question ${i+1}"></div>`
+            ).join('');
+        }
+
+        // ─── Level ────────────────────────────────────────────────────────────────
+
+        function loadLevel() {
+            if (currentIdx >= puzzles.length) return finishGame();
+
+            isTransitioning = false;
+            const p = puzzles[currentIdx];
+
+            document.getElementById('current-hint').textContent = p.topic;
+            document.getElementById('question-counter').textContent = `Question ${currentIdx + 1} / ${puzzles.length}`;
+            updateScoreLive();
+
+            // FIX: re-appliquer TOUS les états passés (sinon les dots repassent au gris)
+            document.querySelectorAll('.dot').forEach((d, i) => {
+                d.className = 'dot';
+                if (i < questionResults.length) {
+                    d.classList.add(questionResults[i] === '✅' ? 'correct' : 'wrong');
+                } else if (i === currentIdx) {
+                    d.classList.add('active');
                 }
-            }).catch(() => {});
+            });
+
+            updateStreakBadge();
+
+            // FIX: Fisher-Yates via shuffle()
+            const grid = document.getElementById('options-grid');
+            grid.innerHTML = '';
+            shuffle(p.options).forEach(opt => {
+                const btn = document.createElement('button');
+                btn.className   = 'option-card';
+                btn.textContent = opt;
+                btn.addEventListener('click', () => handleChoice(opt, btn));
+                grid.appendChild(btn);
+            });
+
+            startTimer();
         }
 
-        showScreen('pseudo-screen');
-        if (!saved) input.focus();
-    });
-
-    document.getElementById('share-btn').addEventListener('click', shareResults);
-
-    // ── Pseudo screen : validation + vérification Firestore ───────────────
-    const pseudoInput = document.getElementById('pseudo-input');
-    const pseudoBtn   = document.getElementById('pseudo-btn');
-
-    pseudoInput.addEventListener('input', () => {
-        pseudoBtn.disabled = pseudoInput.value.trim().length < 2;
-        document.getElementById('pseudo-error').textContent = '';
-    });
-    pseudoInput.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !pseudoBtn.disabled) submitPseudo();
-    });
-    pseudoBtn.addEventListener('click', submitPseudo);
-
-    async function submitPseudo() {
-        const raw   = pseudoInput.value.trim();
-        const errEl = document.getElementById('pseudo-error');
-
-        if (raw.length < 2)  { errEl.textContent = 'Name must be at least 2 characters.'; return; }
-        if (raw.length > 20) { errEl.textContent = 'Name must be 20 characters or less.';  return; }
-        if (!/^[A-Za-z0-9 \-_]+$/.test(raw)) {
-            errEl.textContent = 'Letters, numbers, spaces, - and _ only.'; return;
+        function updateScoreLive() {
+            document.getElementById('score-live').textContent = `${totalScore} pts`;
         }
 
-        playerPseudo = raw;
-        localStorage.setItem('misfit_pseudo', raw);
+        function updateStreakBadge() {
+            const badge   = document.getElementById('streak-badge');
+            const countEl = document.getElementById('streak-count');
+            if (currentStreak >= 2) {
+                countEl.textContent = currentStreak;
+                badge.classList.add('visible');
+            } else {
+                badge.classList.remove('visible');
+            }
+        }
 
-        pseudoBtn.textContent = 'Checking…';
-        pseudoBtn.disabled    = true;
+        // ─── Timer ────────────────────────────────────────────────────────────────
 
-        // Vérifier si ce pseudo a déjà joué aujourd'hui (anti-replay + navigation privée)
-        const todayKey = getTodayKey();
-        const deviceId = await getDeviceId();
-        const record   = await checkAlreadyPlayed(deviceId, todayKey);
+        function startTimer() {
+            clearInterval(timerId);
+            timerStart = performance.now();
+            const fill = document.getElementById('timer-fill');
+            fill.style.width = '100%';
+            fill.className   = 'timer-fill';
 
-        if (record) {
-            totalScore      = record.score   || 0;
-            correctAnswers  = record.correct || 0;
-            questionResults = record.results || [];
+            timerId = setInterval(() => {
+                const elapsed = performance.now() - timerStart;
+                const pct     = Math.max(0, 100 - (elapsed / TIMER_DURATION_MS) * 100);
+                fill.style.width = pct + '%';
+
+                // FIX: classes exclusives pour éviter le cumul warning+danger
+                if      (pct < 20) fill.className = 'timer-fill danger';
+                else if (pct < 45) fill.className = 'timer-fill warning';
+                else               fill.className = 'timer-fill';
+
+                if (pct <= 0) handleChoice(null, null);
+            }, 80);
+        }
+
+        function calcScore() {
+            const elapsed = performance.now() - timerStart;
+            const ratio   = Math.max(0, 1 - elapsed / TIMER_DURATION_MS);
+            return Math.round(MIN_SCORE_PER_Q + (MAX_SCORE_PER_Q - MIN_SCORE_PER_Q) * ratio);
+        }
+
+        // ─── Choice handler ───────────────────────────────────────────────────────
+
+        async function handleChoice(choice, btnElement) {
+            if (isTransitioning) return;
+            const clickTime = performance.now(); // ← capturé AVANT l'appel async (score précis)
+            isTransitioning = true;
+            clearInterval(timerId);
+
+            const dots    = document.querySelectorAll('.dot');
+            const buttons = document.querySelectorAll('.option-card');
+            buttons.forEach(b => { b.disabled = true; });
+
+            // ── Vérification côté serveur ──────────────────────────────────────────
+            let isCorrect     = false;
+            let correctAnswer = null;
+            try {
+                const res = await fetch(`${WORKER_URL}/api/check`, {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        day:           getTodayPuzzleId(),
+                        questionIndex: currentIdx,
+                        userAnswer:    choice ?? '__timeout__', // null = timeout
+                    }),
+                });
+                if (res.ok) {
+                    const data    = await res.json();
+                    isCorrect     = data.correct;
+                    correctAnswer = data.correctAnswer;
+                }
+            } catch (e) {
+                console.warn('handleChoice: check failed (réseau?):', e);
+                // Fallback sécurisé : on considère la réponse comme fausse
+            }
+
+            if (isCorrect) {
+                btnElement.classList.add('selected-correct');
+                dots[currentIdx].classList.remove('active');
+                dots[currentIdx].classList.add('correct');
+
+                currentStreak++;
+                // Score calculé sur clickTime (avant le délai réseau du Worker)
+                const elapsed = clickTime - timerStart;
+                const ratio   = Math.max(0, 1 - elapsed / TIMER_DURATION_MS);
+                let pts       = Math.round(MIN_SCORE_PER_Q + (MAX_SCORE_PER_Q - MIN_SCORE_PER_Q) * ratio);
+                let bonus     = 0;
+                if (currentStreak >= 2) {
+                    bonus = STREAK_BONUS * (currentStreak - 1);
+                    pts  += bonus;
+                }
+                totalScore += pts;
+                correctAnswers++;
+                questionResults.push('✅');
+                updateScoreLive();
+
+                const msg = bonus > 0 ? `+${pts} pts 🔥 (+${bonus} streak!)` : `+${pts} pts ✓`;
+                showToast(msg, 1500);
+
+            } else {
+                if (btnElement) btnElement.classList.add('selected-wrong');
+                // Révélation de la bonne réponse (reçue du Worker après le choix du joueur)
+                if (correctAnswer) {
+                    buttons.forEach(b => { if (b.textContent === correctAnswer) b.classList.add('reveal-correct'); });
+                }
+                dots[currentIdx].classList.remove('active');
+                dots[currentIdx].classList.add('wrong');
+                currentStreak = 0;
+                questionResults.push('❌');
+
+                if (choice === null) showToast("⏱ Time's up!", 1200);
+            }
+
+            currentIdx++;
+            setTimeout(loadLevel, 1600);
+        }
+
+
+        // ─── Finish ───────────────────────────────────────────────────────────────
+
+        async function finishGame() {
+            const todayKey = getTodayKey();
             localStorage.setItem('misfit_day',     todayKey);
             localStorage.setItem('misfit_score',   String(totalScore));
             localStorage.setItem('misfit_correct', String(correctAnswers));
             localStorage.setItem('misfit_results', JSON.stringify(questionResults));
             localStorage.setItem('misfit_total',   String(puzzles.length));
-            // Idempotent : si déjà compté aujourd'hui ne fait rien, sinon incrémente
+
+            // ── Sauvegarder dans Firestore (anti-replay) ───────────────────────
+            getDeviceId().then(deviceId => savePlayRecord(deviceId, todayKey));
+
+            // ── Mettre à jour le streak dans Firestore ─────────────────────────
             await updateStreak(playerPseudo);
             showResults();
-            return;
         }
 
-        pseudoBtn.textContent = 'Start Game ▶';
-        pseudoBtn.disabled    = false;
-        initGame();
-    }
+        function showResults() {
+            const total       = puzzles.length || Number(localStorage.getItem('misfit_total')) || 5;
+            const maxPossible = total * MAX_SCORE_PER_Q;
+            const ratio       = totalScore / maxPossible;
 
-    function initGame() {
-        showScreen('game-screen');
-        createDots();
-        loadLevel();
-    }
-
-
-    function createDots() {
-        const container = document.getElementById('dots-container');
-        container.innerHTML = puzzles.map((_, i) =>
-            `<div class="dot" aria-label="Question ${i+1}"></div>`
-        ).join('');
-    }
-
-    // ─── Level ────────────────────────────────────────────────────────────────
-
-    function loadLevel() {
-        if (currentIdx >= puzzles.length) return finishGame();
-
-        isTransitioning = false;
-        const p = puzzles[currentIdx];
-
-        document.getElementById('current-hint').textContent = p.topic;
-        document.getElementById('question-counter').textContent = `Question ${currentIdx + 1} / ${puzzles.length}`;
-        updateScoreLive();
-
-        // FIX: re-appliquer TOUS les états passés (sinon les dots repassent au gris)
-        document.querySelectorAll('.dot').forEach((d, i) => {
-            d.className = 'dot';
-            if (i < questionResults.length) {
-                d.classList.add(questionResults[i] === '✅' ? 'correct' : 'wrong');
-            } else if (i === currentIdx) {
-                d.classList.add('active');
+            // Badge de performance
+            let badge = '🎯', perfClass = 'perf-ok', perfText = '👍 Good job, keep it up!';
+            if (correctAnswers === total && ratio >= 0.8) {
+                badge = '🏆'; perfClass = 'perf-perfect'; perfText = '🔥 Perfect! Flawless run!';
+            } else if (correctAnswers === total) {
+                badge = '🌟'; perfClass = 'perf-great';   perfText = '⭐ All correct! Well done!';
+            } else if (correctAnswers < Math.ceil(total * 0.4)) {
+                badge = '💪'; perfClass = 'perf-bad';     perfText = '📚 Keep practicing!';
             }
-        });
 
-        updateStreakBadge();
+            document.getElementById('result-badge').textContent   = badge;
+            document.getElementById('final-score').textContent    = 0;
+            document.getElementById('score-max').textContent      = `/ ${maxPossible} pts max`;
+            document.getElementById('correct-count').textContent  = correctAnswers;
+            document.getElementById('total-count').textContent    = total;
+            document.getElementById('emoji-row').textContent      = questionResults.join(' ');
 
-        // FIX: Fisher-Yates via shuffle()
-        const grid = document.getElementById('options-grid');
-        grid.innerHTML = '';
-        shuffle(p.options).forEach(opt => {
-            const btn = document.createElement('button');
-            btn.className   = 'option-card';
-            btn.textContent = opt;
-            btn.addEventListener('click', () => handleChoice(opt, btn));
-            grid.appendChild(btn);
-        });
+            const perfEl = document.getElementById('perf-label');
+            perfEl.className  = `perf-label ${perfClass}`;
+            perfEl.textContent = perfText;
 
-        startTimer();
-    }
 
-    function updateScoreLive() {
-        document.getElementById('score-live').textContent = `${totalScore} pts`;
-    }
+            showScreen('result-screen');
+            animateScore(totalScore);
 
-    function updateStreakBadge() {
-        const badge   = document.getElementById('streak-badge');
-        const countEl = document.getElementById('streak-count');
-        if (currentStreak >= 2) {
-            countEl.textContent = currentStreak;
-            badge.classList.add('visible');
-        } else {
-            badge.classList.remove('visible');
-        }
-    }
-
-    // ─── Timer ────────────────────────────────────────────────────────────────
-
-    function startTimer() {
-        clearInterval(timerId);
-        timerStart = performance.now();
-        const fill = document.getElementById('timer-fill');
-        fill.style.width = '100%';
-        fill.className   = 'timer-fill';
-
-        timerId = setInterval(() => {
-            const elapsed = performance.now() - timerStart;
-            const pct     = Math.max(0, 100 - (elapsed / TIMER_DURATION_MS) * 100);
-            fill.style.width = pct + '%';
-
-            // FIX: classes exclusives pour éviter le cumul warning+danger
-            if      (pct < 20) fill.className = 'timer-fill danger';
-            else if (pct < 45) fill.className = 'timer-fill warning';
-            else               fill.className = 'timer-fill';
-
-            if (pct <= 0) handleChoice(null, null);
-        }, 80);
-    }
-
-    function calcScore() {
-        const elapsed = performance.now() - timerStart;
-        const ratio   = Math.max(0, 1 - elapsed / TIMER_DURATION_MS);
-        return Math.round(MIN_SCORE_PER_Q + (MAX_SCORE_PER_Q - MIN_SCORE_PER_Q) * ratio);
-    }
-
-    // ─── Choice handler ───────────────────────────────────────────────────────
-
-    function handleChoice(choice, btnElement) {
-        if (isTransitioning) return;
-        isTransitioning = true;
-        clearInterval(timerId);
-
-        const correct = puzzles[currentIdx].answer;
-        const dots    = document.querySelectorAll('.dot');
-        const buttons = document.querySelectorAll('.option-card');
-
-        buttons.forEach(b => { b.disabled = true; });
-
-        if (choice === correct) {
-            btnElement.classList.add('selected-correct');
-            dots[currentIdx].classList.remove('active');
-            dots[currentIdx].classList.add('correct');
-
-            currentStreak++;
-            let pts   = calcScore();
-            let bonus = 0;
-            if (currentStreak >= 2) {
-                bonus = STREAK_BONUS * (currentStreak - 1);
-                pts  += bonus;
+            // Streak quotidien
+            const streakEl = document.getElementById('streak-result');
+            if (dailyStreak > 0) {
+                streakEl.textContent = getStreakLabel(dailyStreak);
+                streakEl.classList.add('visible');
+            } else {
+                streakEl.classList.remove('visible');
+                streakEl.textContent = '';
             }
-            totalScore += pts;
-            correctAnswers++;
-            questionResults.push('✅');
-            updateScoreLive();
 
-            const msg = bonus > 0 ? `+${pts} pts 🔥 (+${bonus} streak!)` : `+${pts} pts ✓`;
-            showToast(msg, 1500);
-        } else {
-            // FIX: reveal correct answer même sur timeout (choice === null)
-            if (btnElement) btnElement.classList.add('selected-wrong');
-            buttons.forEach(b => { if (b.textContent === correct) b.classList.add('reveal-correct'); });
-            dots[currentIdx].classList.remove('active');
-            dots[currentIdx].classList.add('wrong');
-            currentStreak = 0;  // reset streak
-            questionResults.push('❌');
-
-            if (choice === null) showToast("⏱ Time's up!", 1200);
+            loadLeaderboard();
         }
 
-        currentIdx++;
-        setTimeout(loadLevel, 1600);
-    }
-
-    // ─── Finish ───────────────────────────────────────────────────────────────
-
-    async function finishGame() {
-        const todayKey = getTodayKey();
-        localStorage.setItem('misfit_day',     todayKey);
-        localStorage.setItem('misfit_score',   String(totalScore));
-        localStorage.setItem('misfit_correct', String(correctAnswers));
-        localStorage.setItem('misfit_results', JSON.stringify(questionResults));
-        localStorage.setItem('misfit_total',   String(puzzles.length));
-
-        // ── Sauvegarder dans Firestore (anti-replay) ───────────────────────
-        getDeviceId().then(deviceId => savePlayRecord(deviceId, todayKey));
-
-        // ── Mettre à jour le streak dans Firestore ─────────────────────────
-        await updateStreak(playerPseudo);
-        showResults();
-    }
-
-    function showResults() {
-        const total       = puzzles.length || Number(localStorage.getItem('misfit_total')) || 5;
-        const maxPossible = total * MAX_SCORE_PER_Q;
-        const ratio       = totalScore / maxPossible;
-
-        // Badge de performance
-        let badge = '🎯', perfClass = 'perf-ok', perfText = '👍 Good job, keep it up!';
-        if (correctAnswers === total && ratio >= 0.8) {
-            badge = '🏆'; perfClass = 'perf-perfect'; perfText = '🔥 Perfect! Flawless run!';
-        } else if (correctAnswers === total) {
-            badge = '🌟'; perfClass = 'perf-great';   perfText = '⭐ All correct! Well done!';
-        } else if (correctAnswers < Math.ceil(total * 0.4)) {
-            badge = '💪'; perfClass = 'perf-bad';     perfText = '📚 Keep practicing!';
+        function animateScore(target) {
+            const el    = document.getElementById('final-score');
+            let current = 0;
+            const step  = Math.max(1, Math.ceil(target / 50));
+            const id    = setInterval(() => {
+                current = Math.min(current + step, target);
+                el.textContent = current;
+                if (current >= target) clearInterval(id);
+            }, 25);
         }
 
-        document.getElementById('result-badge').textContent   = badge;
-        document.getElementById('final-score').textContent    = 0;
-        document.getElementById('score-max').textContent      = `/ ${maxPossible} pts max`;
-        document.getElementById('correct-count').textContent  = correctAnswers;
-        document.getElementById('total-count').textContent    = total;
-        document.getElementById('emoji-row').textContent      = questionResults.join(' ');
+        // ─── Share ────────────────────────────────────────────────────────────────
 
-        const perfEl = document.getElementById('perf-label');
-        perfEl.className  = `perf-label ${perfClass}`;
-        perfEl.textContent = perfText;
+        function shareResults() {
+            const total       = puzzles.length || Number(localStorage.getItem('misfit_total')) || 5;
+            const maxPossible = total * MAX_SCORE_PER_Q;
+            const emojis      = questionResults.join('');
+            const text = [
+                `🔍 MISFIT — ${getTodayKey()}`,
+                `🏆 Score: ${totalScore} / ${maxPossible}`,
+                emojis,
+                `✅ ${correctAnswers}/${total} Spotted`,
+                ``,
+                `Play here: ${globalThis.location.href}`
+            ].join('\n');
 
-
-        showScreen('result-screen');
-        animateScore(totalScore);
-
-        // Streak quotidien
-        const streakEl = document.getElementById('streak-result');
-        if (dailyStreak > 0) {
-            streakEl.textContent = getStreakLabel(dailyStreak);
-            streakEl.classList.add('visible');
-        } else {
-            streakEl.classList.remove('visible');
-            streakEl.textContent = '';
+            if (navigator.share) {
+                navigator.share({ title: 'MISFIT', text }).catch(() => {});
+            } else if (navigator.clipboard) {
+                navigator.clipboard.writeText(text)
+                    .then(()  => showToast('Score copied to clipboard! 📋'))
+                    .catch(()  => showToast('Could not copy — try manually.'));
+            } else {
+                showToast('Could not copy — try manually.');
+            }
         }
 
-        loadLeaderboard();
-    }
+        // ─── Boot ─────────────────────────────────────────────────────────────────
 
-    function animateScore(target) {
-        const el    = document.getElementById('final-score');
-        let current = 0;
-        const step  = Math.max(1, Math.ceil(target / 50));
-        const id    = setInterval(() => {
-            current = Math.min(current + step, target);
-            el.textContent = current;
-            if (current >= target) clearInterval(id);
-        }, 25);
-    }
-
-    // ─── Share ────────────────────────────────────────────────────────────────
-
-    function shareResults() {
-        const total       = puzzles.length || Number(localStorage.getItem('misfit_total')) || 5;
-        const maxPossible = total * MAX_SCORE_PER_Q;
-        const emojis      = questionResults.join('');
-        const text = [
-            `🔍 MISFIT — ${getTodayKey()}`,
-            `🏆 Score: ${totalScore} / ${maxPossible}`,
-            emojis,
-            `✅ ${correctAnswers}/${total} Spotted`,
-            ``,
-            `Play here: ${globalThis.location.href}`
-        ].join('\n');
-
-        if (navigator.share) {
-            navigator.share({ title: 'MISFIT', text }).catch(() => {});
-        } else if (navigator.clipboard) {
-            navigator.clipboard.writeText(text)
-                .then(()  => showToast('Score copied to clipboard! 📋'))
-                .catch(()  => showToast('Could not copy — try manually.'));
-        } else {
-            showToast('Could not copy — try manually.');
+        // DEV HELPER : ouvrir index.html?reset vide tout le cache MISFIT
+        if (new URLSearchParams(location.search).has('reset')) {
+            const keys = ['misfit_pseudo','misfit_did','misfit_ip','misfit_device_id',
+                          'misfit_day','misfit_score','misfit_correct','misfit_results',
+                          'misfit_total','misfit_best_score','misfit_streak','misfit_streak_day'];
+            keys.forEach(k => { localStorage.removeItem(k); sessionStorage.removeItem(k); });
+            console.info('🧹 MISFIT cache cleared — reloading…');
+            location.replace(location.pathname); // retire ?reset de l'URL
         }
-    }
 
-    // ─── Boot ─────────────────────────────────────────────────────────────────
-
-    // DEV HELPER : ouvrir index.html?reset vide tout le cache MISFIT
-    if (new URLSearchParams(location.search).has('reset')) {
-        const keys = ['misfit_pseudo','misfit_did','misfit_ip','misfit_device_id',
-                      'misfit_day','misfit_score','misfit_correct','misfit_results',
-                      'misfit_total','misfit_best_score','misfit_streak','misfit_streak_day'];
-        keys.forEach(k => { localStorage.removeItem(k); sessionStorage.removeItem(k); });
-        console.info('🧹 MISFIT cache cleared — reloading…');
-        location.replace(location.pathname); // retire ?reset de l'URL
-    }
-
-    await loadData();
+        await loadData();
 </script>
 </body>
 </html>
-
