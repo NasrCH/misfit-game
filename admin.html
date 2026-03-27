@@ -104,6 +104,8 @@
     .c-name { font-weight:600; }
     .c-count { background:var(--blue); color:#fff; border-radius:10px; padding:1px 7px; font-size:.66rem; font-weight:700; }
     .geo-attr { font-size:.66rem; color:var(--sub); margin-top:10px; }
+    /* Leaflet divIcon reset — prevent default white box */
+    .misfit-mk { background:none !important; border:none !important; }
 
     @media(max-width:600px) {
       .header { padding:10px 14px; }
@@ -162,7 +164,7 @@
         <div class="kpi-icon">&#128101;</div>
         <div class="kpi-lbl">DAU</div>
         <div class="kpi-val" id="k-dau">&#8212;</div>
-        <div class="kpi-sub2">Players today</div>
+        <div class="kpi-sub2" id="k-dau-sub">Players today</div>
         <div class="kpi-d neu" id="k-dau-d"></div>
       </div>
       <div class="kpi-card">
@@ -279,7 +281,7 @@
 <script type="module">
   import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
   import {
-    getFirestore, doc, getDoc,
+    getFirestore, getDocsFromServer, doc, getDoc,
     collection, query, where, getDocs,
     orderBy, limit
   } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
@@ -437,8 +439,8 @@
       var yest  = dateKey(1);
       var days  = last7days();
 
-      // 1. Scores — last 7 days
-      var scoresSnap = await getDocs(
+      // 1. Scores — last 7 days (forced server fetch = toujours frais, no stale cache)
+      var scoresSnap = await getDocsFromServer(
         query(collection(db, 'scores'), where('date', 'in', days))
       );
       var byDay = {};
@@ -447,6 +449,19 @@
         var dd = sd.data();
         if (byDay[dd.date]) byDay[dd.date].push(dd);
       });
+
+      // 1b. play_records today → source de vérité pour le DAU
+      //     getDocsFromServer : bypass cache — même si scores est en retard, play_records est frais
+      var todayISOStart = dateKey(0) + 'T00:00:00.000Z';
+      var prTodaySnap = await getDocsFromServer(
+        query(collection(db, 'play_records'), where('ts', '>=', todayISOStart))
+      );
+      var uniquePseudosPR = {};
+      prTodaySnap.docs.forEach(function(d) {
+        var ps = (d.data().pseudo || '').trim().toLowerCase();
+        if (ps) uniquePseudosPR[ps] = true;
+      });
+      var dauFromPR = Object.keys(uniquePseudosPR).length;
 
       // 2. Daily stats (funnel, optional)
       var statsArr = await Promise.all(
@@ -485,8 +500,32 @@
       var ts        = sByDay[today] || {};
       var ys        = sByDay[yest]  || {};
 
-      var dau       = todayArr.length;
-      var dauY      = yestArr.length;
+      var dauFromScores = todayArr.length;
+      var dauY          = yestArr.length;
+      var dau = Math.max(dauFromScores, dauFromPR);
+
+      // ── Merge play_records players missing from scores ─────────────────
+      // (race condition: play_records saved ~2s before scores in savePlayRecord)
+      var inScores = {};
+      todayArr.forEach(function(e) {
+        inScores[(e.pseudo || '').trim().toLowerCase()] = true;
+      });
+      var alreadyAdded = {};
+      var allTodayPlayers = todayArr.slice();
+      prTodaySnap.docs.forEach(function(d) {
+        var data = d.data();
+        var ps   = (data.pseudo || '').trim().toLowerCase();
+        if (ps && !inScores[ps] && !alreadyAdded[ps]) {
+          alreadyAdded[ps] = true;
+          allTodayPlayers.push({
+            pseudo:  data.pseudo  || '?',
+            score:   data.score   || 0,
+            correct: data.correct || 0,
+            total:   data.total   || 0,
+            ts:      data.ts      || ''
+          });
+        }
+      });
       var opens     = ts.opens        || 0;
       var starts    = ts.starts       || 0;
       var compl     = ts.completions  || 0;
@@ -501,14 +540,14 @@
       var crY = startsY > 0 ? Math.round(complY / startsY * 100) : null;
 
       var avgScore = dau > 0
-        ? Math.round(todayArr.reduce(function(s, e) { return s + e.score; }, 0) / dau)
+        ? Math.round(allTodayPlayers.reduce(function(s, e) { return s + e.score; }, 0) / dau)
         : 0;
       var avgScoreY = dauY > 0
         ? Math.round(yestArr.reduce(function(s, e) { return s + e.score; }, 0) / dauY)
         : 0;
 
-      var bestEntry = todayArr.length > 0
-        ? todayArr.reduce(function(a, b) { return a.score > b.score ? a : b; })
+      var bestEntry = allTodayPlayers.length > 0
+        ? allTodayPlayers.reduce(function(a, b) { return a.score > b.score ? a : b; })
         : null;
 
       var topStr = topStreaks[0] || null;
@@ -520,6 +559,11 @@
       txt('k-dau', dau);
       $('k-dau-d').textContent = deltaTxt(dau, dauY);
       $('k-dau-d').className   = 'kpi-d ' + (dau >= dauY ? 'up' : 'down');
+      // Show a subtle note when play_records > scores (race condition in savePlayRecord)
+      var pendingScores = dauFromPR - dauFromScores;
+      txt('k-dau-sub', pendingScores > 0
+        ? 'Players today \u26a0\ufe0f ' + pendingScores + ' score(s) en attente'
+        : 'Players today');
 
       if (cr !== null) {
         txt('k-cr', cr + '%');
@@ -556,7 +600,11 @@
       // ── Charts ──────────────────────────────────────────────────────────
       var labels   = days.map(function(d) { return d.slice(5); });
 
-      var dauData  = days.map(function(d) { return byDay[d].length; });
+      var dauData  = days.map(function(d) {
+        // For today: use play_records count (more reliable, saves first)
+        // For past days: scores is complete (race condition long resolved)
+        return d === today ? Math.max(byDay[d].length, dauFromPR) : byDay[d].length;
+      });
       var avgData  = days.map(function(d) {
         var arr = byDay[d];
         if (!arr.length) return 0;
@@ -575,7 +623,7 @@
       upsertChart('c-shares', 'bar',  labels, shareData, '#f5a623');
 
       // ── Tables ──────────────────────────────────────────────────────────
-      renderPlayers(todayArr);
+      renderPlayers(allTodayPlayers);
       renderStreaks(topStreaks);
 
       txt('last-rf', 'Refreshed at ' + new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }));
@@ -833,37 +881,61 @@
         subdomains: 'abcd',
         maxZoom: 19
       }).addTo(leafletMap);
-      leafletMap.invalidateSize(); // Immediate size calc after init
+      leafletMap.invalidateSize();
     } else {
       markersLayer.clearLayers();
     }
 
-    var bounds = [];
+    // ── Group players by IP → one marker per location ─────────────────────
+    var groups = {};
     located.forEach(function(p) {
-      var geo = geoCache[p.ip];
-      var lat = geo.latitude;
-      var lon = geo.longitude;
-      var city    = geo.city    || '';
+      if (!groups[p.ip]) groups[p.ip] = { players: [], geo: geoCache[p.ip] };
+      groups[p.ip].players.push(p);
+    });
+
+    var bounds = [];
+    Object.keys(groups).forEach(function(ip) {
+      var g       = groups[ip];
+      var geo     = g.geo;
+      var players = g.players;
+      var count   = players.length;
+      var lat     = geo.latitude;
+      var lon     = geo.longitude;
+      var city    = geo.city         || '';
       var country = geo.country_name || '';
-      var pseudo  = p.pseudo || '?';
 
       bounds.push([lat, lon]);
 
-      L.circleMarker([lat, lon], {
-        radius: 10,
-        fillColor: '#0a66c2',
-        color: '#ffffff',
-        weight: 2.5,
-        opacity: 1,
-        fillOpacity: 0.9
-      })
-      .addTo(markersLayer)
-      .bindPopup(
-        '<div style="font-family:system-ui;min-width:130px">' +
-        '<strong style="font-size:.9rem">' + esc(pseudo) + '</strong><br>' +
-        '<span style="font-size:.78rem;color:#555">' + esc(city ? city + ', ' + country : country) + '</span>' +
-        '</div>'
-      );
+      // Popup: location header + one line per player
+      var locLine = city ? esc(city + (country ? ', ' + country : '')) : esc(country);
+      var popupHtml =
+        '<div style="font-family:system-ui;min-width:140px">' +
+        (locLine ? '<div style="font-size:.7rem;color:#888;margin-bottom:5px">' + locLine + '</div>' : '') +
+        players.map(function(p) {
+          return '<div style="font-weight:700;font-size:.88rem;padding:2px 0">' + esc(p.pseudo || '?') + '</div>';
+        }).join('') +
+        '</div>';
+
+      // Icon: numbered badge if several players, simple dot if one
+      var sz = count > 1 ? 28 : 14;
+      var iconHtml = count > 1
+        ? '<div style="width:' + sz + 'px;height:' + sz + 'px;background:#0a66c2;color:#fff;' +
+          'border:2.5px solid #fff;border-radius:50%;display:flex;align-items:center;' +
+          'justify-content:center;font-weight:900;font-size:11px;' +
+          'box-shadow:0 2px 8px rgba(10,102,194,.5);font-family:system-ui">' + count + '</div>'
+        : '<div style="width:' + sz + 'px;height:' + sz + 'px;background:#0a66c2;' +
+          'border:2.5px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(10,102,194,.4)"></div>';
+
+      var icon = L.divIcon({
+        html:       iconHtml,
+        className:  'misfit-mk',
+        iconSize:   [sz, sz],
+        iconAnchor: [sz / 2, sz / 2]
+      });
+
+      L.marker([lat, lon], { icon: icon })
+        .addTo(markersLayer)
+        .bindPopup(popupHtml);
     });
 
     if (bounds.length === 1) {
@@ -873,13 +945,7 @@
       catch (e) { leafletMap.setView([20, 0], 2); }
     }
 
-    // Force full re-render: size + redraw all circle markers
-    setTimeout(function() {
-      leafletMap.invalidateSize();
-      markersLayer.eachLayer(function(layer) {
-        if (typeof layer.redraw === 'function') layer.redraw();
-      });
-    }, 150);
+    setTimeout(function() { leafletMap.invalidateSize(); }, 150);
   }
 
   function renderCountryBadges(located) {
