@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MISFIT — Admin</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     :root {
       --blue:#0a66c2; --bg:#f4f2ee; --border:#e0e0e0;
@@ -91,6 +93,17 @@
     /* ── Tracking banner ────────────────────────────────────── */
     .info-banner { background:#eef4fb; border:1px solid #b3d4f5; border-radius:10px; padding:12px 16px; font-size:.78rem; color:var(--blue); margin-bottom:20px; display:flex; align-items:flex-start; gap:10px; }
     .info-banner.warn { background:#fff8e1; border-color:#ffe082; color:#7a5200; }
+
+    /* ── Geo card ───────────────────────────────────────────── */
+    #player-map { height:290px; border-radius:10px; z-index:0; border:1px solid var(--border); }
+    .geo-loading { display:flex; align-items:center; justify-content:center; gap:10px; padding:40px 0; color:var(--sub); font-size:.85rem; }
+    .country-badges { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+    .country-badge { display:flex; align-items:center; gap:6px; background:#f4f2ee; border:1px solid var(--border); border-radius:20px; padding:5px 12px; font-size:.78rem; cursor:default; transition:box-shadow .15s; }
+    .country-badge:hover { box-shadow:0 2px 8px rgba(10,102,194,.12); }
+    .c-flag { font-size:1.1rem; line-height:1; }
+    .c-name { font-weight:600; }
+    .c-count { background:var(--blue); color:#fff; border-radius:10px; padding:1px 7px; font-size:.66rem; font-weight:700; }
+    .geo-attr { font-size:.66rem; color:var(--sub); margin-top:10px; }
 
     @media(max-width:600px) {
       .header { padding:10px 14px; }
@@ -185,6 +198,19 @@
         <div class="kpi-val" id="k-streak">&#8212;</div>
         <div class="kpi-sub2" id="k-streak-name">&#8212;</div>
       </div>
+    </div>
+
+    <!-- Geo card -->
+    <p class="sec">&#127758; O&ugrave; jouent les joueurs &mdash; Aujourd'hui</p>
+    <div class="tbl-card mb" id="geo-card">
+      <div class="chart-sub">G&eacute;olocalisation bas&eacute;e sur les IPs &mdash; <a href="https://ipinfo.io" target="_blank" style="color:var(--blue)">ipinfo.io</a> + <a href="https://freeipapi.com" target="_blank" style="color:var(--blue)">freeipapi.com</a></div>
+      <div class="geo-loading" id="geo-loading"><div class="spin"></div> Localisation des joueurs&hellip;</div>
+      <div id="geo-content" style="display:none">
+        <div id="player-map"></div>
+        <div class="country-badges" id="country-badges"></div>
+        <div class="geo-attr" id="geo-attr">&#128204; Source : <a href="https://ipwho.is" target="_blank" style="color:var(--blue)">ipwho.is</a></div>
+      </div>
+      <div id="geo-empty" style="display:none;padding:24px;text-align:center;color:var(--sub);font-size:.82rem;"></div>
     </div>
 
     <!-- Funnel -->
@@ -554,6 +580,9 @@
 
       txt('last-rf', 'Refreshed at ' + new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }));
 
+      // Geo card — non-blocking, runs in background
+      loadGeoData();
+
     } catch (err) {
       console.error('Admin load error:', err);
       if (err.code === 'permission-denied' || err.message.includes('permissions')) {
@@ -621,6 +650,258 @@
       html += '</tr>';
     });
     tbody.innerHTML = html;
+  }
+
+  // ── Geo / Map ─────────────────────────────────────────────────────────────
+  var geoCache     = {};
+  var leafletMap   = null;
+  var markersLayer = null;
+
+  // Convert 2-letter ISO code → flag emoji  (e.g. "FR" → 🇫🇷)
+  function flag(code) {
+    if (!code || code.length !== 2) return '\uD83C\uDF10';
+    var A = 0x1F1E6;
+    return String.fromCodePoint(A + code.toUpperCase().codePointAt(0) - 65) +
+           String.fromCodePoint(A + code.toUpperCase().codePointAt(1) - 65);
+  }
+
+  // Country code → full name
+  var COUNTRY_NAMES = {
+    'AF':'Afghanistan','AL':'Albania','DZ':'Algeria','AR':'Argentina','AM':'Armenia',
+    'AU':'Australia','AT':'Austria','AZ':'Azerbaijan','BH':'Bahrain','BE':'Belgium',
+    'BR':'Brazil','CA':'Canada','CL':'Chile','CN':'China','CO':'Colombia','HR':'Croatia',
+    'CZ':'Czech Republic','DK':'Denmark','EG':'Egypt','EE':'Estonia','FI':'Finland',
+    'FR':'France','GE':'Georgia','DE':'Germany','GH':'Ghana','GR':'Greece','HU':'Hungary',
+    'IN':'India','ID':'Indonesia','IQ':'Iraq','IE':'Ireland','IL':'Israel','IT':'Italy',
+    'JP':'Japan','JO':'Jordan','KZ':'Kazakhstan','KE':'Kenya','KW':'Kuwait','LV':'Latvia',
+    'LB':'Lebanon','LT':'Lithuania','LU':'Luxembourg','MY':'Malaysia','MA':'Morocco',
+    'MX':'Mexico','NL':'Netherlands','NZ':'New Zealand','NG':'Nigeria','NO':'Norway',
+    'OM':'Oman','PK':'Pakistan','PL':'Poland','PT':'Portugal','QA':'Qatar','RO':'Romania',
+    'RU':'Russia','SA':'Saudi Arabia','SN':'Senegal','SG':'Singapore','ZA':'South Africa',
+    'KR':'South Korea','ES':'Spain','SE':'Sweden','CH':'Switzerland','TW':'Taiwan',
+    'TH':'Thailand','TN':'Tunisia','TR':'Turkey','AE':'UAE','GB':'United Kingdom',
+    'US':'United States','UA':'Ukraine','UY':'Uruguay','VN':'Vietnam'
+  };
+
+  // Try one IP against a single API endpoint, return normalized object or null
+  async function tryGeoAPI(ip, apiFn) {
+    try { return await apiFn(ip); }
+    catch (e) { return null; }
+  }
+
+  // ipinfo.io: free 50k/month, HTTPS, CORS enabled
+  function geoViaIpinfo(ip) {
+    return fetch('https://ipinfo.io/' + ip + '/json')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (!d || d.bogon || !d.loc) return null;
+        var parts = d.loc.split(',');
+        var code  = d.country || '';
+        return {
+          latitude:     parseFloat(parts[0]),
+          longitude:    parseFloat(parts[1]),
+          city:         d.city   || '',
+          country_code: code,
+          country_name: COUNTRY_NAMES[code] || code
+        };
+      });
+  }
+
+  // freeipapi.com: free HTTPS, returns full country name directly
+  function geoViaFreeipapi(ip) {
+    return fetch('https://freeipapi.com/api/json/' + ip)
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (!d || !d.latitude || d.latitude === -90) return null;
+        return {
+          latitude:     d.latitude,
+          longitude:    d.longitude,
+          city:         d.cityName    || '',
+          country_code: d.countryCode || '',
+          country_name: d.countryName || d.countryCode || ''
+        };
+      });
+  }
+
+  async function geolocateSingle(ip) {
+    var result = await tryGeoAPI(ip, geoViaIpinfo);
+    if (result && result.latitude) return result;
+    result = await tryGeoAPI(ip, geoViaFreeipapi);
+    if (result && result.latitude) return result;
+    return null;
+  }
+
+  // Geolocate a list of unique IPs, caching results (retries previous failures)
+  async function geolocateIPs(ips) {
+    // Re-attempt previously failed IPs (null in cache)
+    var toFetch = ips.filter(function(ip) {
+      return ip && ip.trim() && (geoCache[ip] === null || !geoCache.hasOwnProperty(ip));
+    });
+
+    for (var i = 0; i < toFetch.length; i += 5) {
+      var batch = toFetch.slice(i, i + 5);
+      await Promise.all(batch.map(function(ip) {
+        return geolocateSingle(ip).then(function(result) {
+          geoCache[ip] = result;
+        });
+      }));
+      if (i + 5 < toFetch.length) {
+        await new Promise(function(res) { setTimeout(res, 150); });
+      }
+    }
+    return geoCache;
+  }
+
+  // Load play_records for today, geolocate IPs, render map + country badges
+  async function loadGeoData() {
+    $('geo-loading').style.display = 'flex';
+    $('geo-content').style.display = 'none';
+    $('geo-empty').style.display   = 'none';
+
+    try {
+      // Query play_records since midnight UTC today
+      var todayStart = dateKey(0) + 'T00:00:00.000Z';
+      var prSnap = await getDocs(
+        query(collection(db, 'play_records'), where('ts', '>=', todayStart))
+      );
+
+      var players = prSnap.docs
+        .map(function(d) { return d.data(); })
+        .filter(function(d) { return d.ip && d.ip.trim(); });
+
+      if (!players.length) {
+        $('geo-loading').style.display = 'none';
+        $('geo-empty').style.display   = 'block';
+        $('geo-empty').textContent = 'Aucune IP disponible pour aujourd\'hui. Les IPs sont enregistr\u00e9es dans play_records.';
+        return;
+      }
+
+      // Geolocate unique IPs
+      var uniqueIPs = players
+        .map(function(p) { return p.ip; })
+        .filter(function(v, i, a) { return a.indexOf(v) === i; });
+
+      await geolocateIPs(uniqueIPs);
+
+      // Filter players with valid geo
+      var located = players.filter(function(p) {
+        return geoCache[p.ip] && geoCache[p.ip].latitude;
+      });
+
+      $('geo-loading').style.display = 'none';
+
+      // Update attribution with live stats
+      $('geo-attr').innerHTML =
+        '\uD83D\uDCCC <a href="https://ipinfo.io" target="_blank" style="color:var(--blue)">ipinfo.io</a>' +
+        ' + <a href="https://freeipapi.com" target="_blank" style="color:var(--blue)">freeipapi.com</a>' +
+        ' &mdash; <strong>' + located.length + '</strong>/' + players.length + ' joueur(s) localis\u00e9(s)';
+
+      if (!located.length) {
+        $('geo-empty').style.display = 'block';
+        $('geo-empty').innerHTML =
+          '<strong>' + players.length + '</strong> joueur(s) avec IP trouv\u00e9(s), ' +
+          'mais ipinfo.io et freeipapi.com ont tous les deux \u00e9chou\u00e9 (r\u00e9seau ou IPs priv\u00e9es).<br>' +
+          '<span style="font-size:.74rem">V\u00e9rifie la console pour le d\u00e9tail.</span>';
+        return;
+      }
+
+      $('geo-content').style.display = 'block';
+
+      // Let the browser reflow geo-content before Leaflet reads container dimensions
+      await new Promise(function(r) { setTimeout(r, 60); });
+
+      renderMap(located);
+      renderCountryBadges(located);
+
+    } catch (e) {
+      console.warn('loadGeoData error:', e);
+      $('geo-loading').style.display = 'none';
+      $('geo-empty').style.display   = 'block';
+      $('geo-empty').textContent = 'Impossible de charger les donn\u00e9es de localisation : ' + e.message;
+    }
+  }
+
+  function renderMap(located) {
+    if (typeof L === 'undefined') return;
+
+    // Init map once
+    if (!leafletMap) {
+      leafletMap   = L.map('player-map', { scrollWheelZoom: false }).setView([20, 0], 2);
+      markersLayer = L.layerGroup().addTo(leafletMap);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+      }).addTo(leafletMap);
+      leafletMap.invalidateSize(); // Immediate size calc after init
+    } else {
+      markersLayer.clearLayers();
+    }
+
+    var bounds = [];
+    located.forEach(function(p) {
+      var geo = geoCache[p.ip];
+      var lat = geo.latitude;
+      var lon = geo.longitude;
+      var city    = geo.city    || '';
+      var country = geo.country_name || '';
+      var pseudo  = p.pseudo || '?';
+
+      bounds.push([lat, lon]);
+
+      L.circleMarker([lat, lon], {
+        radius: 10,
+        fillColor: '#0a66c2',
+        color: '#ffffff',
+        weight: 2.5,
+        opacity: 1,
+        fillOpacity: 0.9
+      })
+      .addTo(markersLayer)
+      .bindPopup(
+        '<div style="font-family:system-ui;min-width:130px">' +
+        '<strong style="font-size:.9rem">' + esc(pseudo) + '</strong><br>' +
+        '<span style="font-size:.78rem;color:#555">' + esc(city ? city + ', ' + country : country) + '</span>' +
+        '</div>'
+      );
+    });
+
+    if (bounds.length === 1) {
+      leafletMap.setView(bounds[0], 6);
+    } else if (bounds.length > 1) {
+      try { leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 7 }); }
+      catch (e) { leafletMap.setView([20, 0], 2); }
+    }
+
+    // Force full re-render: size + redraw all circle markers
+    setTimeout(function() {
+      leafletMap.invalidateSize();
+      markersLayer.eachLayer(function(layer) {
+        if (typeof layer.redraw === 'function') layer.redraw();
+      });
+    }, 150);
+  }
+
+  function renderCountryBadges(located) {
+    var countries = {};
+    located.forEach(function(p) {
+      var geo  = geoCache[p.ip];
+      var code = geo.country_code || geo.country || 'XX';
+      var name = geo.country_name || code;
+      if (!countries[code]) countries[code] = { name: name, code: code, count: 0 };
+      countries[code].count++;
+    });
+
+    var sorted = Object.values(countries).sort(function(a, b) { return b.count - a.count; });
+    var html   = '';
+    sorted.forEach(function(c) {
+      html += '<div class="country-badge" title="' + esc(c.name) + '">' +
+              '<span class="c-flag">' + flag(c.code) + '</span>' +
+              '<span class="c-name">' + esc(c.name) + '</span>' +
+              '<span class="c-count">' + c.count + '</span>' +
+              '</div>';
+    });
+    $('country-badges').innerHTML = html;
   }
 
   // ── Permission error helper ───────────────────────────────────────────────
