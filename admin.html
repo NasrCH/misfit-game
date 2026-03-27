@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MISFIT — Admin</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --blue:#0a66c2; --bg:#f4f2ee; --border:#e0e0e0;
+      --sub:rgba(0,0,0,.55); --green:#057647; --red:#cc1016; --gold:#f5a623;
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:-apple-system,system-ui,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:#000000e6; min-height:100vh; }
+
+    /* ── Auth ──────────────────────────────────────────────── */
+    #auth-gate { display:flex; justify-content:center; align-items:center; min-height:100vh; background:linear-gradient(135deg,#e8f0fe,#f4f2ee,#e6f4ec); }
+    .auth-card { background:#fff; border-radius:16px; box-shadow:0 8px 32px rgba(10,102,194,.13); padding:40px 32px; text-align:center; width:320px; }
+    .auth-logo { font-size:2rem; font-weight:900; background:linear-gradient(135deg,#0a66c2,#1a8cff); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; letter-spacing:-1px; margin-bottom:6px; }
+    .auth-sub  { font-size:.72rem; color:var(--sub); text-transform:uppercase; letter-spacing:2px; margin-bottom:24px; }
+    .auth-input { width:100%; padding:12px 16px; border:2px solid var(--border); border-radius:10px; font-size:1rem; outline:none; transition:border-color .2s; margin-bottom:10px; font-family:inherit; }
+    .auth-input:focus { border-color:var(--blue); }
+    .auth-btn { width:100%; padding:12px; background:linear-gradient(135deg,#0a66c2,#0856a0); color:#fff; border:none; border-radius:26px; font-weight:700; cursor:pointer; font-size:1rem; }
+    .auth-btn:hover { opacity:.9; }
+    .auth-err { color:var(--red); font-size:.75rem; margin-top:8px; min-height:18px; }
+
+    /* ── Layout ─────────────────────────────────────────────── */
+    #app { display:none; }
+    .header { background:#fff; border-bottom:1px solid var(--border); padding:14px 28px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+    .header-logo { font-size:1.35rem; font-weight:900; background:linear-gradient(135deg,#0a66c2,#1a8cff); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+    .header-meta { font-size:.72rem; color:var(--sub); }
+    .header-btns { display:flex; gap:8px; align-items:center; }
+    .btn-r { padding:7px 14px; background:var(--blue); color:#fff; border:none; border-radius:20px; font-size:.78rem; font-weight:700; cursor:pointer; }
+    .btn-r:hover { background:#0856a0; }
+    .btn-l { padding:7px 14px; background:#fff; color:var(--sub); border:1px solid var(--border); border-radius:20px; font-size:.78rem; font-weight:600; cursor:pointer; }
+    .btn-l:hover { border-color:var(--red); color:var(--red); }
+    .last-rf { font-size:.68rem; color:var(--sub); }
+    .content { padding:24px 28px; max-width:1200px; margin:0 auto; }
+
+    /* ── Section titles ─────────────────────────────────────── */
+    .sec { font-size:.66rem; font-weight:700; letter-spacing:1.8px; text-transform:uppercase; color:var(--sub); margin:0 0 14px; }
+    .mb { margin-bottom:28px; }
+
+    /* ── KPI Cards ──────────────────────────────────────────── */
+    .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(175px,1fr)); gap:14px; }
+    .kpi-card { background:#fff; border-radius:12px; padding:18px; box-shadow:0 2px 12px rgba(0,0,0,.06); border:1px solid var(--border); }
+    .kpi-icon  { font-size:1.5rem; margin-bottom:6px; }
+    .kpi-lbl   { font-size:.65rem; text-transform:uppercase; letter-spacing:1.2px; color:var(--sub); font-weight:700; margin-bottom:4px; }
+    .kpi-val   { font-size:1.9rem; font-weight:900; color:var(--blue); line-height:1; }
+    .kpi-sub2  { font-size:.7rem; color:var(--sub); margin-top:3px; }
+    .kpi-d     { font-size:.68rem; font-weight:700; margin-top:4px; }
+    .up   { color:var(--green); }
+    .down { color:var(--red); }
+    .neu  { color:var(--sub); }
+
+    /* ── Funnel ─────────────────────────────────────────────── */
+    .funnel-card { background:#fff; border-radius:12px; padding:20px; box-shadow:0 2px 12px rgba(0,0,0,.06); border:1px solid var(--border); }
+    .funnel-row  { display:flex; align-items:center; margin-top:14px; overflow-x:auto; flex-wrap:nowrap; gap:0; }
+    .f-step { flex:1; min-width:90px; text-align:center; padding:14px 8px; background:linear-gradient(135deg,#f0f7ff,#e8f0fe); border:1px solid #ddeeff; border-radius:10px; margin:0 3px; }
+    .f-icon  { font-size:1.4rem; margin-bottom:2px; }
+    .f-val   { font-size:1.5rem; font-weight:900; color:var(--blue); }
+    .f-lbl   { font-size:.62rem; text-transform:uppercase; letter-spacing:1px; color:var(--sub); font-weight:700; margin-top:2px; }
+    .f-rate  { font-size:.7rem; color:var(--green); font-weight:700; margin-top:2px; }
+    .f-arrow { font-size:1rem; color:#ccc; flex-shrink:0; padding:0 2px; }
+    .funnel-note { font-size:.72rem; color:var(--sub); margin-top:10px; font-style:italic; }
+
+    /* ── Charts ─────────────────────────────────────────────── */
+    .charts-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; }
+    .chart-card  { background:#fff; border-radius:12px; padding:20px; box-shadow:0 2px 12px rgba(0,0,0,.06); border:1px solid var(--border); }
+    .chart-ttl   { font-size:.8rem; font-weight:800; margin-bottom:2px; }
+    .chart-sub   { font-size:.68rem; color:var(--sub); margin-bottom:14px; }
+    .chart-wrap  { position:relative; height:190px; }
+
+    /* ── Tables ─────────────────────────────────────────────── */
+    .tbl-card { background:#fff; border-radius:12px; padding:20px; box-shadow:0 2px 12px rgba(0,0,0,.06); border:1px solid var(--border); overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; font-size:.82rem; }
+    th { text-align:left; font-size:.63rem; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:var(--sub); padding:8px 12px; border-bottom:2px solid var(--border); }
+    td { padding:9px 12px; border-bottom:1px solid var(--border); }
+    tr:last-child td { border-bottom:none; }
+    tr:hover td { background:#f8faff; }
+    .bdg { display:inline-block; padding:2px 7px; border-radius:10px; font-size:.63rem; font-weight:700; }
+    .bdg-g { background:#e6f4ea; color:var(--green); }
+    .bdg-r { background:#fce8e6; color:var(--red); }
+    .bdg-o { background:#fff8e1; color:#b8860b; }
+
+    /* ── Spinner ────────────────────────────────────────────── */
+    #spinner { position:fixed; inset:0; background:rgba(255,255,255,.88); display:none; justify-content:center; align-items:center; z-index:999; font-size:.95rem; font-weight:700; color:var(--blue); gap:10px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .spin { width:26px; height:26px; border:3px solid #ddeeff; border-top-color:var(--blue); border-radius:50%; animation:spin .8s linear infinite; }
+
+    /* ── Tracking banner ────────────────────────────────────── */
+    .info-banner { background:#eef4fb; border:1px solid #b3d4f5; border-radius:10px; padding:12px 16px; font-size:.78rem; color:var(--blue); margin-bottom:20px; display:flex; align-items:flex-start; gap:10px; }
+    .info-banner.warn { background:#fff8e1; border-color:#ffe082; color:#7a5200; }
+
+    @media(max-width:600px) {
+      .header { padding:10px 14px; }
+      .content { padding:14px; }
+      .kpi-grid { grid-template-columns:repeat(2,1fr); }
+      .charts-grid { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Auth -->
+<div id="auth-gate">
+  <div class="auth-card">
+    <div class="auth-logo">MISFIT</div>
+    <div class="auth-sub">Admin Dashboard</div>
+    <input id="pwd" type="password" class="auth-input" placeholder="Password..." autocomplete="current-password">
+    <button id="pwd-btn" class="auth-btn">Enter Dashboard</button>
+    <div id="pwd-err" class="auth-err"></div>
+  </div>
+</div>
+
+<!-- Spinner -->
+<div id="spinner"><div class="spin"></div> Loading data...</div>
+
+<!-- Dashboard -->
+<div id="app">
+  <div class="header">
+    <div>
+      <div class="header-logo">MISFIT</div>
+      <div class="header-meta">Admin · Daily Logic Challenge</div>
+    </div>
+    <div class="header-btns">
+      <span class="last-rf" id="last-rf"></span>
+      <button class="btn-r" id="btn-refresh">&#8635; Refresh</button>
+      <button class="btn-l" id="btn-logout">Logout</button>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- Tracking notice -->
+    <div class="info-banner warn" id="tracking-banner" style="display:none">
+      <span>&#9888;&#65039;</span>
+      <span>
+        <strong>Completion Rate &amp; K-Factor</strong> require analytics tracking in <code>index.html</code>.
+        Add a <code>logDailyEvent(field)</code> call (opens / starts / completions / shares) writing to
+        the <code>daily_stats/{date}</code> collection. These KPIs will auto-populate once enabled.
+      </span>
+    </div>
+
+    <!-- KPIs -->
+    <p class="sec mb">&#128202; Today's KPIs &mdash; <span id="hd-date"></span></p>
+    <div class="kpi-grid mb">
+      <div class="kpi-card">
+        <div class="kpi-icon">&#128101;</div>
+        <div class="kpi-lbl">DAU</div>
+        <div class="kpi-val" id="k-dau">&#8212;</div>
+        <div class="kpi-sub2">Players today</div>
+        <div class="kpi-d neu" id="k-dau-d"></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon">&#9989;</div>
+        <div class="kpi-lbl">Completion Rate</div>
+        <div class="kpi-val" id="k-cr">&#8212;</div>
+        <div class="kpi-sub2">Starts &#8594; Score screen</div>
+        <div class="kpi-d neu" id="k-cr-d"></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon">&#128640;</div>
+        <div class="kpi-lbl">K-Factor</div>
+        <div class="kpi-val" id="k-kf">&#8212;</div>
+        <div class="kpi-sub2">Share clicks today</div>
+        <div class="kpi-d neu" id="k-kf-d"></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon">&#127919;</div>
+        <div class="kpi-lbl">Avg Score</div>
+        <div class="kpi-val" id="k-avg">&#8212;</div>
+        <div class="kpi-sub2">Points average today</div>
+        <div class="kpi-d neu" id="k-avg-d"></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon">&#127942;</div>
+        <div class="kpi-lbl">Best Score</div>
+        <div class="kpi-val" id="k-best">&#8212;</div>
+        <div class="kpi-sub2" id="k-best-name">&#8212;</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon">&#128293;</div>
+        <div class="kpi-lbl">Top Streak</div>
+        <div class="kpi-val" id="k-streak">&#8212;</div>
+        <div class="kpi-sub2" id="k-streak-name">&#8212;</div>
+      </div>
+    </div>
+
+    <!-- Funnel -->
+    <p class="sec">&#9660; Today's Funnel</p>
+    <div class="funnel-card mb">
+      <div class="chart-sub">Player journey &mdash; Opens &#8594; Starts &#8594; Completions &#8594; Shares</div>
+      <div class="funnel-row" id="funnel-row"></div>
+      <div class="funnel-note" id="funnel-note"></div>
+    </div>
+
+    <!-- 7-day Charts -->
+    <p class="sec">&#128200; 7-Day Trends</p>
+    <div class="charts-grid mb">
+      <div class="chart-card">
+        <div class="chart-ttl">&#128101; Daily Active Users</div>
+        <div class="chart-sub">Players who completed a game per day</div>
+        <div class="chart-wrap"><canvas id="c-dau"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-ttl">&#127919; Average Score</div>
+        <div class="chart-sub">Points average per day</div>
+        <div class="chart-wrap"><canvas id="c-avg"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-ttl">&#9989; Completion Rate</div>
+        <div class="chart-sub">Completions / Starts (requires analytics tracking)</div>
+        <div class="chart-wrap"><canvas id="c-cr"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-ttl">&#128640; Share Clicks (K-Factor)</div>
+        <div class="chart-sub">Viral growth engine (requires analytics tracking)</div>
+        <div class="chart-wrap"><canvas id="c-shares"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Today's players -->
+    <p class="sec">&#127885; Today's Players</p>
+    <div class="tbl-card mb">
+      <table>
+        <thead>
+          <tr>
+            <th>Rank</th><th>Player</th><th>Score</th>
+            <th>Correct</th><th>Accuracy</th><th>Time</th>
+          </tr>
+        </thead>
+        <tbody id="t-players"></tbody>
+      </table>
+    </div>
+
+    <!-- Streak leaders -->
+    <p class="sec">&#128293; Streak Leaders (All-Time Top 10)</p>
+    <div class="tbl-card mb">
+      <table>
+        <thead>
+          <tr>
+            <th>Rank</th><th>Player</th><th>Streak</th><th>Last Played</th>
+          </tr>
+        </thead>
+        <tbody id="t-streaks"></tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<script type="module">
+  import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
+  import {
+    getFirestore, doc, getDoc,
+    collection, query, where, getDocs,
+    orderBy, limit
+  } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
+
+  const CFG = {
+    apiKey:            'AIzaSyBEG9mOSns3-Gw1vAEnZILaIRKrVnweHdo',
+    authDomain:        'misfit-game.firebaseapp.com',
+    projectId:         'misfit-game',
+    storageBucket:     'misfit-game.firebasestorage.app',
+    messagingSenderId: '394080113498',
+    appId:             '1:394080113498:web:18e40d37027d00f67ed963'
+  };
+
+  const PASS = 'misfit2026';
+  const app  = initializeApp(CFG);
+  const db   = getFirestore(app);
+
+  // ── Tiny helpers ──────────────────────────────────────────────────────────
+  const $   = id => document.getElementById(id);
+  const txt = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+  const esc = s => String(s)
+    .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+
+  function dateKey(offset) {
+    offset = offset || 0;
+    const d = new Date();
+    d.setDate(d.getDate() - offset);
+    const y  = d.getFullYear();
+    const m  = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + dd;
+  }
+
+  function last7days() {
+    return [6,5,4,3,2,1,0].map(i => dateKey(i));
+  }
+
+  function fmtTime(iso) {
+    if (!iso) return '\u2014';
+    try {
+      return new Date(iso).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+    } catch (e) { return '\u2014'; }
+  }
+
+  function deltaTxt(cur, prev, suffix) {
+    suffix = suffix || '';
+    if (!prev || prev === 0) return '';
+    const d   = cur - prev;
+    const pct = Math.round(d / prev * 100);
+    const s   = pct >= 0 ? ('+' + pct) : String(pct);
+    if (d > 0) return '\u25b2 +' + d + suffix + ' vs yesterday (' + s + '%)';
+    if (d < 0) return '\u25bc ' + d + suffix + ' vs yesterday (' + s + '%)';
+    return '\u2192 Same as yesterday';
+  }
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  if (localStorage.getItem('misfit_adm') === PASS) boot();
+
+  $('pwd-btn').addEventListener('click', tryAuth);
+  $('pwd').addEventListener('keydown', function(e) { if (e.key === 'Enter') tryAuth(); });
+
+  function tryAuth() {
+    if ($('pwd').value === PASS) {
+      localStorage.setItem('misfit_adm', PASS);
+      boot();
+    } else {
+      $('pwd-err').textContent = 'Incorrect password';
+      $('pwd').value = '';
+      $('pwd').focus();
+    }
+  }
+
+  $('btn-logout').addEventListener('click', function() {
+    localStorage.removeItem('misfit_adm');
+    location.reload();
+  });
+
+  $('btn-refresh').addEventListener('click', loadAll);
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+  function boot() {
+    $('auth-gate').style.display = 'none';
+    $('app').style.display = 'block';
+    txt('hd-date', dateKey(0));
+    loadAll();
+    setInterval(loadAll, 5 * 60 * 1000);
+  }
+
+  // ── Charts ────────────────────────────────────────────────────────────────
+  var charts = {};
+
+  function upsertChart(id, type, labels, data, color, extraOpts) {
+    extraOpts = extraOpts || {};
+    var ctx = $(id).getContext('2d');
+
+    var ds = {
+      data: data,
+      borderColor: color,
+      backgroundColor: type === 'bar' ? color + 'bb' : color + '18',
+      borderWidth: type === 'bar' ? 1.5 : 2.5,
+      borderRadius: type === 'bar' ? 6 : 0,
+      fill: type !== 'bar',
+      tension: 0.35,
+      pointRadius: 4,
+      pointBackgroundColor: color
+    };
+
+    if (charts[id]) {
+      charts[id].data.labels          = labels;
+      charts[id].data.datasets[0].data = data;
+      charts[id].update('none');
+      return;
+    }
+
+    var yTicks = extraOpts.yTicks || {};
+    var yMax   = extraOpts.yMax;
+
+    charts[id] = new Chart(ctx, {
+      type: type,
+      data: { labels: labels, datasets: [ds] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#1a1a1a',
+            padding: 10,
+            cornerRadius: 8,
+            titleFont: { size: 11 },
+            bodyFont:  { size: 11 }
+          }
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            ticks: { font: { size: 10 }, color: 'rgba(0,0,0,.45)' }
+          },
+          y: {
+            beginAtZero: true,
+            max: yMax,
+            grid: { color: 'rgba(0,0,0,.04)' },
+            ticks: Object.assign({ font: { size: 10 }, color: 'rgba(0,0,0,.45)' }, yTicks)
+          }
+        }
+      }
+    });
+  }
+
+  // ── Load all data ─────────────────────────────────────────────────────────
+  async function loadAll() {
+    $('spinner').style.display = 'flex';
+    try {
+      var today = dateKey(0);
+      var yest  = dateKey(1);
+      var days  = last7days();
+
+      // 1. Scores — last 7 days
+      var scoresSnap = await getDocs(
+        query(collection(db, 'scores'), where('date', 'in', days))
+      );
+      var byDay = {};
+      days.forEach(function(d) { byDay[d] = []; });
+      scoresSnap.docs.forEach(function(sd) {
+        var dd = sd.data();
+        if (byDay[dd.date]) byDay[dd.date].push(dd);
+      });
+
+      // 2. Daily stats (funnel, optional)
+      var statsArr = await Promise.all(
+        days.map(function(d) { return getDoc(doc(db, 'daily_stats', d)); })
+      );
+      var sByDay = {};
+      statsArr.forEach(function(snap, i) {
+        sByDay[days[i]] = snap.exists()
+          ? snap.data()
+          : { opens:0, starts:0, completions:0, shares:0 };
+      });
+
+      // 3. Top streaks (ordered by streak desc)
+      var topStreaks = [];
+      try {
+        var streaksSnap = await getDocs(
+          query(collection(db, 'streaks'), orderBy('streak', 'desc'), limit(10))
+        );
+        topStreaks = streaksSnap.docs.map(function(d) {
+          return Object.assign({ _id: d.id }, d.data());
+        });
+      } catch (e) {
+        // Index might not exist yet — fallback: fetch all and sort in JS
+        try {
+          var sAll = await getDocs(collection(db, 'streaks'));
+          topStreaks = sAll.docs
+            .map(function(d) { return Object.assign({ _id: d.id }, d.data()); })
+            .sort(function(a, b) { return (b.streak || 0) - (a.streak || 0); })
+            .slice(0, 10);
+        } catch (e2) { topStreaks = []; }
+      }
+
+      // ── KPI calculations ────────────────────────────────────────────────
+      var todayArr  = byDay[today] || [];
+      var yestArr   = byDay[yest]  || [];
+      var ts        = sByDay[today] || {};
+      var ys        = sByDay[yest]  || {};
+
+      var dau       = todayArr.length;
+      var dauY      = yestArr.length;
+      var opens     = ts.opens        || 0;
+      var starts    = ts.starts       || 0;
+      var compl     = ts.completions  || 0;
+      var shares    = ts.shares       || 0;
+      var startsY   = ys.starts       || 0;
+      var complY    = ys.completions  || 0;
+      var sharesY   = ys.shares       || 0;
+
+      var hasTracking = starts > 0;
+
+      var cr  = starts > 0 ? Math.round(compl  / starts  * 100) : null;
+      var crY = startsY > 0 ? Math.round(complY / startsY * 100) : null;
+
+      var avgScore = dau > 0
+        ? Math.round(todayArr.reduce(function(s, e) { return s + e.score; }, 0) / dau)
+        : 0;
+      var avgScoreY = dauY > 0
+        ? Math.round(yestArr.reduce(function(s, e) { return s + e.score; }, 0) / dauY)
+        : 0;
+
+      var bestEntry = todayArr.length > 0
+        ? todayArr.reduce(function(a, b) { return a.score > b.score ? a : b; })
+        : null;
+
+      var topStr = topStreaks[0] || null;
+
+      // Show tracking notice if needed
+      $('tracking-banner').style.display = hasTracking ? 'none' : 'flex';
+
+      // ── Set KPI values ──────────────────────────────────────────────────
+      txt('k-dau', dau);
+      $('k-dau-d').textContent = deltaTxt(dau, dauY);
+      $('k-dau-d').className   = 'kpi-d ' + (dau >= dauY ? 'up' : 'down');
+
+      if (cr !== null) {
+        txt('k-cr', cr + '%');
+        $('k-cr-d').textContent = deltaTxt(cr, crY, '%');
+        $('k-cr-d').className   = 'kpi-d ' + (cr >= (crY || 0) ? 'up' : 'down');
+      } else {
+        txt('k-cr', '\u2014');
+        $('k-cr-d').textContent = 'Tracking not yet enabled';
+        $('k-cr-d').className   = 'kpi-d neu';
+      }
+
+      if (hasTracking) {
+        txt('k-kf', shares);
+        $('k-kf-d').textContent = deltaTxt(shares, sharesY);
+        $('k-kf-d').className   = 'kpi-d ' + (shares >= sharesY ? 'up' : 'down');
+      } else {
+        txt('k-kf', '\u2014');
+        $('k-kf-d').textContent = 'Tracking not yet enabled';
+        $('k-kf-d').className   = 'kpi-d neu';
+      }
+
+      txt('k-avg', avgScore ? (avgScore + ' pts') : '\u2014');
+      $('k-avg-d').textContent = deltaTxt(avgScore, avgScoreY, ' pts');
+      $('k-avg-d').className   = 'kpi-d ' + (avgScore >= avgScoreY ? 'up' : 'down');
+
+      txt('k-best',      bestEntry ? (bestEntry.score + ' pts') : '\u2014');
+      txt('k-best-name', bestEntry ? ('\ud83e\udd47 ' + bestEntry.pseudo) : '\u2014');
+      txt('k-streak',    topStr ? (topStr.streak + ' days') : '\u2014');
+      txt('k-streak-name', topStr ? ('\ud83d\udd25 ' + (topStr.pseudo || topStr._id)) : '\u2014');
+
+      // ── Funnel ──────────────────────────────────────────────────────────
+      renderFunnel(opens, starts, dau, shares, !hasTracking);
+
+      // ── Charts ──────────────────────────────────────────────────────────
+      var labels   = days.map(function(d) { return d.slice(5); });
+
+      var dauData  = days.map(function(d) { return byDay[d].length; });
+      var avgData  = days.map(function(d) {
+        var arr = byDay[d];
+        if (!arr.length) return 0;
+        return Math.round(arr.reduce(function(s, e) { return s + e.score; }, 0) / arr.length);
+      });
+      var crData   = days.map(function(d) {
+        var s = sByDay[d] || {};
+        return s.starts > 0 ? Math.round((s.completions || 0) / s.starts * 100) : 0;
+      });
+      var shareData = days.map(function(d) { return (sByDay[d] || {}).shares || 0; });
+
+      upsertChart('c-dau',    'line', labels, dauData,   '#0a66c2');
+      upsertChart('c-avg',    'line', labels, avgData,   '#9c27b0');
+      upsertChart('c-cr',     'line', labels, crData,    '#057647',
+        { yMax: 100, yTicks: { callback: function(v) { return v + '%'; } } });
+      upsertChart('c-shares', 'bar',  labels, shareData, '#f5a623');
+
+      // ── Tables ──────────────────────────────────────────────────────────
+      renderPlayers(todayArr);
+      renderStreaks(topStreaks);
+
+      txt('last-rf', 'Refreshed at ' + new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }));
+
+    } catch (err) {
+      console.error('Admin load error:', err);
+      if (err.code === 'permission-denied' || err.message.includes('permissions')) {
+        showPermError();
+      } else {
+        alert('Error loading data: ' + err.message);
+      }
+    } finally {
+      $('spinner').style.display = 'none';
+    }
+  }
+
+  // ── Render funnel ─────────────────────────────────────────────────────────
+  function renderFunnel(opens, starts, completions, shares, noTracking) {
+    var steps = [
+      { icon: '\ud83d\udc40', label: 'Opens',       val: opens,       base: null        },
+      { icon: '\u25b6\ufe0f',  label: 'Starts',      val: starts,      base: opens       },
+      { icon: '\ud83c\udfc1', label: 'Completions', val: completions, base: starts      },
+      { icon: '\ud83d\ude80', label: 'Shares',      val: shares,      base: completions }
+    ];
+
+    var html = '';
+    steps.forEach(function(s, i) {
+      var rate = (s.base && s.base > 0) ? Math.round(s.val / s.base * 100) : null;
+      if (i > 0) html += '<div class="f-arrow">\u2192</div>';
+      html += '<div class="f-step">';
+      html += '<div class="f-icon">' + s.icon + '</div>';
+      html += '<div class="f-val">' + s.val + '</div>';
+      html += '<div class="f-lbl">' + s.label + '</div>';
+      if (rate !== null) html += '<div class="f-rate">' + rate + '% from prev</div>';
+      html += '</div>';
+    });
+
+    $('funnel-row').innerHTML = html;
+    $('funnel-note').textContent = noTracking
+      ? '\u26a0\ufe0f Opens / Starts / Shares not tracked yet. Add logDailyEvent() to index.html to unlock the full funnel.'
+      : '';
+  }
+
+  // ── Render players table ──────────────────────────────────────────────────
+  function renderPlayers(scores) {
+    var tbody = $('t-players');
+    if (!scores || !scores.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--sub)">No players today yet</td></tr>';
+      return;
+    }
+    var sorted = scores.slice().sort(function(a, b) { return b.score - a.score; });
+    var medals = ['\ud83e\udd47', '\ud83e\udd48', '\ud83e\udd49'];
+    var html   = '';
+    sorted.forEach(function(e, i) {
+      var acc   = e.total > 0 ? Math.round(e.correct / e.total * 100) : 0;
+      var badge = acc === 100
+        ? '<span class="bdg bdg-o">Perfect</span>'
+        : (acc >= 60
+          ? '<span class="bdg bdg-g">Good</span>'
+          : '<span class="bdg bdg-r">Needs work</span>');
+      var rank = i < 3 ? medals[i] : ('#' + (i + 1));
+      html += '<tr>';
+      html += '<td style="font-weight:800">' + rank + '</td>';
+      html += '<td style="font-weight:700">' + esc(e.pseudo || '?') + '</td>';
+      html += '<td style="font-weight:800;color:var(--blue)">' + e.score + ' pts</td>';
+      html += '<td>' + e.correct + '/' + e.total + '</td>';
+      html += '<td>' + badge + ' ' + acc + '%</td>';
+      html += '<td style="font-size:.73rem;color:var(--sub)">' + fmtTime(e.ts) + '</td>';
+      html += '</tr>';
+    });
+    tbody.innerHTML = html;
+  }
+
+  // ── Permission error helper ───────────────────────────────────────────────
+  function showPermError() {
+    var rules = [
+      'rules_version = \'2\';',
+      'service cloud.firestore {',
+      '  match /databases/{database}/documents {',
+      '    match /daily_puzzles/{doc} {',
+      '      allow read: if true;',
+      '      allow write: if false;',
+      '    }',
+      '    match /scores/{doc} {',
+      '      allow read: if true;',
+      '      allow write: if true;',
+      '    }',
+      '    match /play_records/{doc} {',
+      '      allow read: if true;',
+      '      allow write: if true;',
+      '    }',
+      '    match /streaks/{doc} {',
+      '      allow read: if true;',
+      '      allow write: if true;',
+      '    }',
+      '    match /daily_stats/{doc} {',
+      '      allow read: if true;',
+      '      allow write: if true;',
+      '    }',
+      '  }',
+      '}'
+    ].join('\n');
+
+    var el = $('perm-error');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'perm-error';
+      el.style.cssText = 'background:#fce8e6;border:1px solid #f5c2c1;border-radius:12px;padding:20px 24px;margin:20px 28px;font-size:.82rem;';
+      el.innerHTML =
+        '<div style="font-weight:800;font-size:1rem;color:#cc1016;margin-bottom:10px">&#128274; Firestore permission denied</div>' +
+        '<p style="margin-bottom:12px;color:#333">Tes r&egrave;gles Firestore ne couvrent pas toutes les collections lues par l\'admin.<br>' +
+        'Va dans <strong>Firebase Console &rsaquo; Firestore &rsaquo; Rules</strong> et remplace tout par :</p>' +
+        '<pre id="rules-pre" style="background:#1a1a1a;color:#7ec8e3;border-radius:8px;padding:14px;overflow-x:auto;font-size:.75rem;line-height:1.6;cursor:pointer;title:Cliquer pour copier"></pre>' +
+        '<p style="margin-top:10px;font-size:.74rem;color:var(--sub)">&#128073; Clique sur le bloc de code pour copier, puis publie dans Firebase Console.</p>';
+      var content = $('app').querySelector('.content');
+      content.insertBefore(el, content.firstChild);
+    }
+    var pre = document.getElementById('rules-pre');
+    pre.textContent = rules;
+    pre.onclick = function() {
+      navigator.clipboard && navigator.clipboard.writeText(rules).then(function() {
+        pre.style.outline = '2px solid #057647';
+        setTimeout(function() { pre.style.outline = ''; }, 1500);
+      });
+    };
+  }
+
+  // ── Render streak table ───────────────────────────────────────────────────
+  function renderStreaks(streaks) {
+    var tbody = $('t-streaks');
+    if (!streaks || !streaks.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--sub)">No streak data yet</td></tr>';
+      return;
+    }
+    var medals = ['\ud83e\udd47', '\ud83e\udd48', '\ud83e\udd49'];
+    var html   = '';
+    streaks.forEach(function(e, i) {
+      var name = esc(e.pseudo || e._id || '?');
+      var rank = i < 3 ? medals[i] : ('#' + (i + 1));
+      html += '<tr>';
+      html += '<td style="font-weight:800">' + rank + '</td>';
+      html += '<td style="font-weight:700">' + name + '</td>';
+      html += '<td style="font-weight:800;color:var(--blue)">\ud83d\udd25 ' + (e.streak || 0) + ' days</td>';
+      html += '<td style="font-size:.73rem;color:var(--sub)">' + (e.lastPlayedDay || '\u2014') + '</td>';
+      html += '</tr>';
+    });
+    tbody.innerHTML = html;
+  }
+
+</script>
+</body>
+</html>
+
