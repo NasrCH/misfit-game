@@ -107,6 +107,44 @@
     /* Leaflet divIcon reset — prevent default white box */
     .misfit-mk { background:none !important; border:none !important; }
 
+    /* ── Stale / Frozen banner ──────────────────────────────────────────── */
+    #stale-banner {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      background: #fff8e1;
+      border-bottom: 2px solid #ffe082;
+      padding: 11px 28px;
+      font-size: .82rem;
+      color: #7a5200;
+      position: sticky;
+      top: 57px;   /* under the header */
+      z-index: 99;
+    }
+    #stale-banner.visible { display: flex; }
+    #stale-banner strong { font-weight: 800; }
+    .stale-refresh-btn {
+      margin-left: auto;
+      padding: 6px 16px;
+      background: #f5a623;
+      color: #fff;
+      border: none;
+      border-radius: 20px;
+      font-size: .78rem;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .stale-refresh-btn:hover { background: #e0921a; }
+    .frozen-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: #f5a623; flex-shrink: 0;
+      animation: pulse-dot 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%,100% { opacity: 1; } 50% { opacity: .3; }
+    }
+
     @media(max-width:600px) {
       .header { padding:10px 14px; }
       .content { padding:14px; }
@@ -130,6 +168,13 @@
 
 <!-- Spinner -->
 <div id="spinner"><div class="spin"></div> Loading data...</div>
+
+<!-- Stale data banner (shown after 5 min of inactivity) -->
+<div id="stale-banner">
+  <div class="frozen-dot"></div>
+  <span>⏸ <strong>Auto-refresh paused</strong> — data may be stale. Firebase quota protected.</span>
+  <button class="stale-refresh-btn" id="stale-refresh-btn">↻ Refresh now</button>
+</div>
 
 <!-- Dashboard -->
 <div id="app">
@@ -375,7 +420,65 @@
       location.reload();
     });
 
-    $('btn-refresh').addEventListener('click', loadAll);
+    $('btn-refresh').addEventListener('click', function() {
+      unfreeze();
+      loadAll();
+    });
+
+    // ── Freeze / Stale logic ──────────────────────────────────────────────────
+    // After FREEZE_AFTER_MS of inactivity, all Firebase calls are blocked and
+    // a banner is shown. The user must click Refresh to resume.
+    var FREEZE_AFTER_MS = 5 * 60 * 1000; // 5 minutes
+    var isFrozen        = false;
+    var freezeTimer     = null;
+    var hiddenSince     = null; // timestamp when tab became hidden
+
+    function scheduleFreezeTimer() {
+      clearTimeout(freezeTimer);
+      freezeTimer = setTimeout(function() {
+        isFrozen = true;
+        $('stale-banner').classList.add('visible');
+        $('btn-refresh').disabled    = false; // keep manual button usable
+        $('btn-refresh').textContent = '↻ Refresh';
+      }, FREEZE_AFTER_MS);
+    }
+
+    function unfreeze() {
+      isFrozen = false;
+      $('stale-banner').classList.remove('visible');
+    }
+
+    // Pause timer when tab is hidden, resume (or freeze immediately) when visible
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        hiddenSince = Date.now();
+        clearTimeout(freezeTimer);
+      } else {
+        if (hiddenSince !== null) {
+          var awayMs = Date.now() - hiddenSince;
+          hiddenSince = null;
+          if (awayMs >= FREEZE_AFTER_MS) {
+            // Was away long enough → freeze immediately
+            isFrozen = true;
+            $('stale-banner').classList.add('visible');
+            return;
+          }
+          // Resume the remaining countdown
+          var remaining = FREEZE_AFTER_MS - awayMs;
+          clearTimeout(freezeTimer);
+          freezeTimer = setTimeout(function() {
+            isFrozen = true;
+            $('stale-banner').classList.add('visible');
+          }, remaining);
+        }
+      }
+    });
+
+    // Stale banner "Refresh now" button
+    $('stale-refresh-btn').addEventListener('click', function() {
+      unfreeze();
+      loadAll();
+    });
 
     // ── Boot ──────────────────────────────────────────────────────────────────
     function boot() {
@@ -383,7 +486,7 @@
       $('app').style.display = 'block';
       txt('hd-date', dateKey(0));
       loadAll();
-      setInterval(loadAll, 5 * 60 * 1000);
+      // ✅ No setInterval — manual refresh only, freeze timer handles stale data
     }
 
     // ── Charts ────────────────────────────────────────────────────────────────
@@ -449,6 +552,9 @@
 
     // ── Load all data ─────────────────────────────────────────────────────────
     async function loadAll() {
+      // Guard: if frozen, refuse to make any Firebase call until user manually unfreezes
+      if (isFrozen) return;
+
       $('spinner').style.display = 'flex';
       try {
         var today = dateKey(0);
@@ -618,6 +724,9 @@
         renderStreaks(topStreaks);
 
         txt('last-rf', 'Refreshed at ' + new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }));
+
+        // Restart the 5-min freeze countdown after every successful load
+        scheduleFreezeTimer();
 
         // Geo card — non-blocking, runs in background
         loadGeoData();
